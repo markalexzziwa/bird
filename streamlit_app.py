@@ -99,38 +99,12 @@ st.markdown("""
         transform: translateY(-1px);
         box-shadow: 0 6px 20px rgba(46, 134, 171, 0.3);
     }
-    .file-upload-text {
-        color: #2E86AB;
-        font-size: 1.2rem;
-        font-weight: 600;
-        margin-bottom: 15px;
-    }
-    .file-upload-subtext {
-        color: #666;
-        font-size: 0.9rem;
-        margin-bottom: 20px;
-    }
-    .upload-icon {
-        font-size: 3rem;
-        margin-bottom: 15px;
-        color: #2E86AB;
-    }
     .section-title {
         font-size: 1.5rem;
         color: #2E86AB;
         margin-bottom: 15px;
         text-align: center;
         font-weight: 600;
-    }
-    .method-button {
-        width: 100%;
-        margin: 10px 0;
-        padding: 15px;
-        font-size: 1.1rem;
-    }
-    .active-method {
-        background: rgba(46, 134, 171, 0.9) !important;
-        border: 2px solid #2E86AB !important;
     }
     .warning-box {
         background: rgba(255, 193, 7, 0.2);
@@ -189,33 +163,30 @@ class ResNet34BirdModel:
         self.model = None
         self.device = None
         self.transform = None
-        # Look for model weights in current directory
+        # Look for model weights in multiple locations
         self.model_path = self._find_model_file()
         self.label_map_path = './label_map.json'
         
     def _find_model_file(self):
-        """Find the ResNet34 model file in the current directory"""
-        possible_names = [
+        """Find the ResNet34 model file in multiple possible locations"""
+        possible_locations = [
+            # Streamlit Community Cloud uploaded files
+            '/mount/src/bird/resnet34_bird_region_weights.pth',
+            './resnet34_bird_region_weights.pth',
+            './models/resnet34_bird_region_weights.pth',
             'resnet34_bird_region_weights.pth',
+            # Alternative names
             'resnet34_weights.pth',
             'bird_model.pth',
             'model_weights.pth',
-            'resnet34.pth'
         ]
         
-        for filename in possible_names:
-            if os.path.exists(filename):
-                st.info(f"📁 Found model file: {filename}")
-                return filename
+        for filepath in possible_locations:
+            if os.path.exists(filepath):
+                st.info(f"📁 Found model file: {filepath}")
+                return filepath
         
-        # Also check in models subdirectory
-        for filename in possible_names:
-            model_path = f'./models/{filename}'
-            if os.path.exists(model_path):
-                st.info(f"📁 Found model file: {model_path}")
-                return model_path
-        
-        st.error("❌ No model file found in current directory. Please ensure the ResNet34 model file is in the app directory.")
+        st.error("❌ No model file found. Please upload the model file to Streamlit Community Cloud.")
         return None
     
     def check_dependencies(self):
@@ -228,9 +199,13 @@ class ResNet34BirdModel:
             st.error("""
             ❌ PyTorch and torchvision are required but not installed.
             
-            Please install them first:
-            ```bash
-            pip install torch torchvision pillow
+            Please add them to your requirements.txt:
+            ```
+            torch
+            torchvision
+            pillow
+            numpy
+            opencv-python-headless
             ```
             """)
             return False
@@ -281,7 +256,15 @@ class ResNet34BirdModel:
             return False
         
         if self.model_path is None or not os.path.exists(self.model_path):
-            st.error("❌ Model file not found. Cannot proceed without the ResNet34 model.")
+            st.error("""
+            ❌ Model file not found. 
+            
+            Please upload your ResNet34 model file to Streamlit Community Cloud:
+            1. Go to your app settings (bottom right gear icon)
+            2. Click on "File Uploader" 
+            3. Upload your 'resnet34_bird_region_weights.pth' file
+            4. Restart the app
+            """)
             return False
         
         try:
@@ -494,10 +477,6 @@ class ResNet34BirdModel:
                 
                 if x2 > x1 and y2 > y1:  # Valid crop region
                     bird_region = pil_original.crop((x1, y1, x2, y2))
-                    
-                    # Display the cropped region for debugging
-                    with st.expander(f"View Bird Region {i+1}"):
-                        st.image(bird_region, caption=f"Bird Region {i+1}", use_column_width=True)
                 else:
                     bird_region = pil_original  # Fallback to full image
                 
@@ -698,7 +677,7 @@ def main():
         ❌ System failed to initialize properly. 
         
         Please check:
-        1. Required dependencies are installed: `pip install torch torchvision pillow streamlit numpy opencv-python`
+        1. Required dependencies are installed
         2. ResNet34 model file exists in the app directory
         3. Sufficient memory available
         
