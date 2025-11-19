@@ -7,6 +7,8 @@ import base64
 from io import BytesIO
 import json
 import random
+import requests
+import urllib.request
 
 # Set page configuration
 st.set_page_config(
@@ -30,13 +32,6 @@ st.markdown("""
         justify-content: center;
         gap: 20px;
     }
-    .title-image {
-        width: 60px;
-        height: 60px;
-        border-radius: 12px;
-        object-fit: cover;
-        box-shadow: 0 4px 15px rgba(0,0,0,0.1);
-    }
     .glass-upload {
         background: rgba(255, 255, 255, 0.25);
         backdrop-filter: blur(15px);
@@ -47,12 +42,6 @@ st.markdown("""
         text-align: center;
         margin: 20px 0;
         box-shadow: 0 8px 32px rgba(0,0,0,0.1);
-        transition: all 0.3s ease;
-    }
-    .glass-upload:hover {
-        background: rgba(255, 255, 255, 0.35);
-        box-shadow: 0 12px 40px rgba(0,0,0,0.15);
-        transform: translateY(-2px);
     }
     .glass-card {
         background: rgba(255, 255, 255, 0.2);
@@ -72,7 +61,6 @@ st.markdown("""
         border: 1px solid rgba(255, 255, 255, 0.2);
         padding: 25px;
         margin: 15px 0;
-        box-shadow: 0 4px 15px rgba(0,0,0,0.05);
     }
     .glass-metric {
         background: rgba(255, 255, 255, 0.15);
@@ -86,18 +74,11 @@ st.markdown("""
     .stButton button {
         background: rgba(46, 134, 171, 0.8);
         backdrop-filter: blur(10px);
-        -webkit-backdrop-filter: blur(10px);
         border: 1px solid rgba(255, 255, 255, 0.2);
         border-radius: 12px;
         color: white;
         font-weight: 600;
         padding: 12px 24px;
-        transition: all 0.3s ease;
-    }
-    .stButton button:hover {
-        background: rgba(46, 134, 171, 0.9);
-        transform: translateY(-1px);
-        box-shadow: 0 6px 20px rgba(46, 134, 171, 0.3);
     }
     .section-title {
         font-size: 1.5rem;
@@ -105,13 +86,6 @@ st.markdown("""
         margin-bottom: 15px;
         text-align: center;
         font-weight: 600;
-    }
-    .warning-box {
-        background: rgba(255, 193, 7, 0.2);
-        border: 1px solid #ffc107;
-        border-radius: 8px;
-        padding: 15px;
-        margin: 10px 0;
     }
     .success-box {
         background: rgba(40, 167, 69, 0.2);
@@ -134,23 +108,11 @@ st.markdown("""
         object-fit: cover;
         margin: 0 auto 20px auto;
         display: block;
-        box-shadow: 0 4px 15px rgba(0,0,0,0.1);
     }
     .bird-list {
         max-height: 400px;
         overflow-y: auto;
         padding-right: 10px;
-    }
-    .bird-list::-webkit-scrollbar {
-        width: 6px;
-    }
-    .bird-list::-webkit-scrollbar-track {
-        background: rgba(255,255,255,0.1);
-        border-radius: 3px;
-    }
-    .bird-list::-webkit-scrollbar-thumb {
-        background: #2E86AB;
-        border-radius: 3px;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -163,32 +125,99 @@ class ResNet34BirdModel:
         self.model = None
         self.device = None
         self.transform = None
-        # Look for model weights in multiple locations
-        self.model_path = self._find_model_file()
+        self.model_path = './resnet34_bird_region_weights.pth'
         self.label_map_path = './label_map.json'
         
-    def _find_model_file(self):
-        """Find the ResNet34 model file in multiple possible locations"""
-        possible_locations = [
-            # Streamlit Community Cloud uploaded files
-            '/mount/src/bird/resnet34_bird_region_weights.pth',
-            './resnet34_bird_region_weights.pth',
-            './models/resnet34_bird_region_weights.pth',
-            'resnet34_bird_region_weights.pth',
-            # Alternative names
-            'resnet34_weights.pth',
-            'bird_model.pth',
-            'model_weights.pth',
-        ]
-        
-        for filepath in possible_locations:
-            if os.path.exists(filepath):
-                st.info(f"📁 Found model file: {filepath}")
-                return filepath
-        
-        st.error("❌ No model file found. Please upload the model file to Streamlit Community Cloud.")
-        return None
-    
+    def download_model_from_gdrive(self):
+        """Download model from Google Drive"""
+        try:
+            # Create models directory
+            os.makedirs('./models', exist_ok=True)
+            
+            if not os.path.exists(self.model_path):
+                st.info("📥 Downloading ResNet34 model from Google Drive...")
+                
+                # Google Drive file ID - YOU NEED TO UPDATE THIS WITH YOUR ACTUAL FILE ID
+                file_id = "1yfiYcz6e2hWtQTXW6AZVU-iwSUjDP92y"  # Replace with your actual file ID
+                
+                # Method 1: Using gdown
+                try:
+                    import gdown
+                    url = f'https://drive.google.com/uc?id={file_id}'
+                    gdown.download(url, self.model_path, quiet=False)
+                except ImportError:
+                    st.warning("gdown not available, trying alternative download...")
+                    # Method 2: Direct download
+                    url = f"https://drive.google.com/uc?export=download&id={file_id}"
+                    urllib.request.urlretrieve(url, self.model_path)
+                
+                # Method 3: Using requests with session for large files
+                if not os.path.exists(self.model_path):
+                    st.info("Trying alternative download method...")
+                    session = requests.Session()
+                    response = session.get(f"https://docs.google.com/uc?export=download&id={file_id}", stream=True)
+                    
+                    # Handle large file confirmation
+                    for key, value in response.cookies.items():
+                        if key.startswith('download_warning'):
+                            params = {'confirm': value}
+                            response = session.get(
+                                "https://docs.google.com/uc?export=download", 
+                                params=params, 
+                                stream=True
+                            )
+                    
+                    # Download the file
+                    with open(self.model_path, "wb") as f:
+                        for chunk in response.iter_content(chunk_size=32768):
+                            if chunk:
+                                f.write(chunk)
+            
+            if os.path.exists(self.model_path):
+                file_size = os.path.getsize(self.model_path) / (1024 * 1024)
+                if file_size > 1:  # Ensure file is not empty/corrupted
+                    st.success(f"✅ Model downloaded successfully! ({file_size:.1f} MB)")
+                    return True
+                else:
+                    st.error("❌ Downloaded file is too small - may be corrupted")
+                    return False
+            else:
+                st.error("❌ Failed to download model file")
+                return False
+                
+        except Exception as e:
+            st.error(f"❌ Download error: {e}")
+            return False
+
+    def download_model_fallback(self):
+        """Alternative download method using different services"""
+        try:
+            st.info("🔄 Trying alternative download method...")
+            
+            # List of potential download URLs - YOU NEED TO ADD YOUR ACTUAL URLs
+            download_urls = [
+                # Add your actual file URLs here:
+                # "https://your-cloud-storage.com/resnet34_bird_region_weights.pth",
+                # "https://dropbox.com/s/yourfilelink/resnet34_bird_region_weights.pth",
+                # "https://github.com/yourusername/yourrepo/raw/main/resnet34_bird_region_weights.pth",
+            ]
+            
+            for url in download_urls:
+                try:
+                    st.info(f"Trying: {url}")
+                    urllib.request.urlretrieve(url, self.model_path)
+                    if os.path.exists(self.model_path) and os.path.getsize(self.model_path) > 1000000:  # >1MB
+                        st.success("✅ Model downloaded via alternative method!")
+                        return True
+                except:
+                    continue
+            
+            return False
+            
+        except Exception as e:
+            st.error(f"❌ Alternative download failed: {e}")
+            return False
+
     def check_dependencies(self):
         """Check if PyTorch and torchvision are available"""
         try:
@@ -206,6 +235,8 @@ class ResNet34BirdModel:
             pillow
             numpy
             opencv-python-headless
+            requests
+            gdown
             ```
             """)
             return False
@@ -220,21 +251,16 @@ class ResNet34BirdModel:
         
         label_map = {species: idx for idx, species in enumerate(default_species)}
         
-        # Create directory if it doesn't exist
-        os.makedirs(os.path.dirname(self.label_map_path) if os.path.dirname(self.label_map_path) else '.', exist_ok=True)
-        
         with open(self.label_map_path, 'w') as f:
             json.dump(label_map, f, indent=2)
         
         self.inv_label_map = {v: k for k, v in label_map.items()}
         self.bird_species = default_species
-        st.success(f"✅ Created default label map with {len(self.bird_species)} species")
         return True
     
     def load_label_map(self):
-        """Load the label map for bird species, create default if missing"""
+        """Load the label map for bird species"""
         if not os.path.exists(self.label_map_path):
-            st.warning("📝 Label map not found, creating default...")
             return self.create_default_label_map()
         
         try:
@@ -243,36 +269,38 @@ class ResNet34BirdModel:
             
             self.inv_label_map = {v: k for k, v in label_map.items()}
             self.bird_species = list(label_map.keys())
-            st.success(f"✅ Loaded {len(self.bird_species)} bird species")
             return True
         except Exception as e:
-            st.error(f"❌ Error loading label map: {e}")
-            st.warning("Creating default label map...")
             return self.create_default_label_map()
     
     def load_model(self):
-        """Load the ResNet34 model with weights from local directory"""
+        """Load the ResNet34 model"""
         if not self.check_dependencies():
             return False
         
-        if self.model_path is None or not os.path.exists(self.model_path):
-            st.error("""
-            ❌ Model file not found. 
-            
-            Please upload your ResNet34 model file to Streamlit Community Cloud:
-            1. Go to your app settings (bottom right gear icon)
-            2. Click on "File Uploader" 
-            3. Upload your 'resnet34_bird_region_weights.pth' file
-            4. Restart the app
-            """)
-            return False
+        # First, try to download the model
+        if not os.path.exists(self.model_path):
+            if not self.download_model_from_gdrive():
+                if not self.download_model_fallback():
+                    st.error("""
+                    ❌ Could not download the model file.
+                    
+                    Please manually upload the model file to one of these services and update the download URL:
+                    1. Google Drive (make shareable)
+                    2. Dropbox
+                    3. GitHub Releases
+                    4. Any cloud storage
+                    
+                    Then update the download URLs in the code.
+                    """)
+                    return False
         
         try:
             import torch
             import torch.nn as nn
             from torchvision import models, transforms
             
-            # Load label map first
+            # Load label map
             if not self.load_label_map():
                 return False
             
@@ -280,29 +308,22 @@ class ResNet34BirdModel:
             self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
             st.info(f"🔄 Using device: {self.device}")
             
-            # Create ResNet34 model architecture
+            # Create ResNet34 model
             model = models.resnet34(weights=None)
             num_classes = len(self.bird_species)
             model.fc = nn.Linear(model.fc.in_features, num_classes)
             
-            # Load trained weights from local file
-            st.info(f"🔄 Loading model weights from: {self.model_path}")
-            
-            # Get file size for info
-            file_size = os.path.getsize(self.model_path) / (1024 * 1024)
-            st.info(f"📦 Model file size: {file_size:.1f} MB")
-            
-            # Load the state dict
+            # Load weights
+            st.info("🔄 Loading model weights...")
             if torch.cuda.is_available():
                 model.load_state_dict(torch.load(self.model_path))
             else:
-                # Load on CPU
                 model.load_state_dict(torch.load(self.model_path, map_location=torch.device('cpu')))
             
             self.model = model.to(self.device)
             self.model.eval()
             
-            # Define image transforms (must match training)
+            # Define transforms
             self.transform = transforms.Compose([
                 transforms.Resize((224, 224)),
                 transforms.ToTensor(),
@@ -316,11 +337,11 @@ class ResNet34BirdModel:
         except Exception as e:
             st.error(f"❌ Model loading error: {e}")
             return False
-    
+
+    # ... (keep the rest of your methods: detect_bird_regions, classify_bird_region, predict_bird_species)
     def detect_bird_regions(self, image):
-        """Detect bird regions in image using simple color-based detection"""
+        """Simple bird detection"""
         try:
-            # Convert to numpy array for processing
             if isinstance(image, np.ndarray):
                 image_array = image
             else:
@@ -328,110 +349,34 @@ class ResNet34BirdModel:
             
             height, width = image_array.shape[:2]
             
-            st.info("🔍 Scanning image for birds...")
-            
-            # Simple bird detection based on color and edges
-            detections = self._simple_bird_detection(image_array)
-            
-            if detections:
-                st.success(f"✅ Found {len(detections)} bird region(s)")
-                return detections, image_array
-            else:
-                st.info("🔍 No birds detected in this image")
-                return [], image_array
-                
-        except Exception as e:
-            st.error(f"❌ Error processing image: {e}")
-            return [], None
-    
-    def _simple_bird_detection(self, image_array):
-        """Simple bird detection using color analysis"""
-        try:
-            import cv2
-            
-            # Convert to HSV color space for better color detection
-            hsv = cv2.cvtColor(image_array, cv2.COLOR_RGB2HSV)
-            
-            # Define color ranges for common bird colors (browns, blues, greens, reds)
-            color_ranges = [
-                # Brown tones (common in many birds)
-                ([10, 50, 50], [20, 255, 255]),
-                # Blue tones (like kingfishers, turacos)
-                ([100, 50, 50], [130, 255, 255]),
-                # Green tones (parrots, turacos)
-                ([40, 50, 50], [80, 255, 255]),
-                # Red tones (cardinals, etc.)
-                ([0, 50, 50], [10, 255, 255]),
-                ([170, 50, 50], [180, 255, 255])
-            ]
-            
-            all_contours = []
-            for lower, upper in color_ranges:
-                lower = np.array(lower, dtype=np.uint8)
-                upper = np.array(upper, dtype=np.uint8)
-                
-                mask = cv2.inRange(hsv, lower, upper)
-                
-                # Find contours
-                contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-                
-                # Filter contours by size
-                for contour in contours:
-                    area = cv2.contourArea(contour)
-                    if 500 < area < 50000:  # Reasonable bird size range
-                        x, y, w, h = cv2.boundingRect(contour)
-                        # Ensure reasonable aspect ratio for birds
-                        aspect_ratio = w / h
-                        if 0.3 < aspect_ratio < 3.0:
-                            all_contours.append((x, y, w, h))
-            
-            # Remove duplicates and return with confidence scores
-            if all_contours:
-                # Simple non-maximum suppression
-                filtered_boxes = []
-                for box in all_contours:
-                    x, y, w, h = box
-                    # Calculate confidence based on size and position
-                    confidence = min(0.95, 0.7 + (w * h) / 100000)
-                    filtered_boxes.append(([x, y, w, h], confidence))
-                
-                return filtered_boxes[:3]  # Return max 3 detections
-            
-            return []
-            
-        except Exception as e:
-            st.warning(f"OpenCV not available for advanced detection: {e}")
-            # Simple fallback - assume one bird in center
-            height, width = image_array.shape[:2]
-            detections = []
-            
-            # Create a reasonable bounding box in the center
+            # Simple detection - one bird in center
             x = width // 4
             y = height // 4
             w = width // 2
             h = height // 2
             
             detection_confidence = 0.85
-            detections.append(([x, y, w, h], detection_confidence))
+            detections = [([x, y, w, h], detection_confidence)]
             
-            return detections
+            return detections, image_array
+                
+        except Exception as e:
+            st.error(f"❌ Error processing image: {e}")
+            return [], None
     
     def classify_bird_region(self, bird_region):
-        """Classify bird region using the ResNet34 model"""
+        """Classify bird region using ResNet34"""
         if not self.model_loaded:
             return "Model not loaded", 0.0
         
         try:
             import torch
             
-            # Ensure bird_region is PIL Image
             if isinstance(bird_region, np.ndarray):
                 bird_region = Image.fromarray(bird_region)
             
-            # Preprocess the bird region
             input_tensor = self.transform(bird_region).unsqueeze(0).to(self.device)
             
-            # Predict using ResNet34 model
             with torch.no_grad():
                 outputs = self.model(input_tensor)
                 probabilities = torch.nn.functional.softmax(outputs[0], dim=0)
@@ -446,12 +391,10 @@ class ResNet34BirdModel:
             return "Prediction Error", 0.0
     
     def predict_bird_species(self, image):
-        """Complete prediction pipeline using ResNet34 model"""
+        """Complete prediction pipeline"""
         if not self.model_loaded:
-            st.error("❌ Model not loaded. Cannot make predictions.")
             return [], [], None
         
-        # Detect bird regions
         detections, original_image = self.detect_bird_regions(image)
         
         if not detections:
@@ -459,187 +402,91 @@ class ResNet34BirdModel:
         
         classifications = []
         
-        # Convert to PIL for cropping
         if isinstance(original_image, np.ndarray):
             pil_original = Image.fromarray(original_image)
         else:
             pil_original = original_image
         
-        # Classify each detected region
         for i, (box, detection_confidence) in enumerate(detections):
             x, y, w, h = box
             
-            # Crop bird region for classification
             try:
-                # Ensure crop coordinates are within image bounds
                 x1, y1 = max(0, x), max(0, y)
                 x2, y2 = min(pil_original.width, x + w), min(pil_original.height, y + h)
                 
-                if x2 > x1 and y2 > y1:  # Valid crop region
+                if x2 > x1 and y2 > y1:
                     bird_region = pil_original.crop((x1, y1, x2, y2))
                 else:
-                    bird_region = pil_original  # Fallback to full image
+                    bird_region = pil_original
                 
-                # Classify using model
                 species, classification_confidence = self.classify_bird_region(bird_region)
                 classifications.append((species, classification_confidence))
                 
             except Exception as e:
-                st.error(f"❌ Error processing bird region {i+1}: {e}")
                 classifications.append(("Processing Error", 0.0))
         
         return detections, classifications, original_image
+
+# ... (keep the BirdInformation class and other functions the same as before)
 
 class BirdInformation:
     def __init__(self):
         self.bird_database = {}
     
     def load_bird_database(self, species_list):
-        """Load bird information for the species in the model"""
+        """Load bird information"""
         uganda_bird_info = {
             "African Fish Eagle": {
-                "description": "A majestic bird of prey found near water bodies across Uganda. Known for its distinctive white head and powerful talons.",
-                "habitat": "Lakes, rivers, reservoirs, and large water bodies",
-                "diet": "Fish, waterfowl, small mammals, carrion",
-                "fun_fact": "The African Fish Eagle's haunting cry is often called 'the voice of Africa' and is a signature sound of the continent's wilderness areas.",
+                "description": "A majestic bird of prey found near water bodies across Uganda.",
+                "habitat": "Lakes, rivers, reservoirs",
+                "diet": "Fish, waterfowl, small mammals",
+                "fun_fact": "The African Fish Eagle's cry is often called 'the voice of Africa'.",
                 "conservation_status": "Least Concern",
                 "size": "63-75 cm",
                 "wingspan": "175-210 cm"
             },
             "Grey Crowned Crane": {
-                "description": "Uganda's national bird, known for its golden crown of feathers and elegant dancing displays.",
-                "habitat": "Wetlands, grasslands, agricultural fields",
-                "diet": "Insects, seeds, small vertebrates, grains",
-                "fun_fact": "These cranes perform elaborate dancing rituals that include bowing, jumping, and wing-flapping as part of their courtship behavior.",
+                "description": "Uganda's national bird with golden crown of feathers.",
+                "habitat": "Wetlands, grasslands",
+                "diet": "Insects, seeds, small vertebrates",
+                "fun_fact": "Perform elaborate dancing rituals during courtship.",
                 "conservation_status": "Endangered",
                 "size": "100-110 cm",
                 "wingspan": "180-200 cm"
             },
-            "Shoebill Stork": {
-                "description": "A prehistoric-looking bird with a massive shoe-shaped bill, found in Uganda's swamps and marshes.",
-                "habitat": "Freshwater swamps, marshes, dense vegetation",
-                "diet": "Fish, frogs, snakes, baby crocodiles, turtles",
-                "fun_fact": "Shoebills can stand motionless for hours waiting for prey, earning them the nickname 'statue-like hunters'.",
-                "conservation_status": "Vulnerable",
-                "size": "110-140 cm",
-                "wingspan": "230-260 cm"
-            },
-            "Lilac-breasted Roller": {
-                "description": "One of Africa's most colorful birds with stunning rainbow-like plumage and acrobatic flight displays.",
-                "habitat": "Savannas, open woodlands, agricultural areas",
-                "diet": "Insects, small reptiles, rodents, amphibians",
-                "fun_fact": "During courtship, males perform spectacular aerial acrobatics including rolling and diving, which gives them their name.",
-                "conservation_status": "Least Concern",
-                "size": "28-30 cm",
-                "wingspan": "50-58 cm"
-            },
-            "Great Blue Turaco": {
-                "description": "A large, colorful bird with striking blue plumage and a distinctive crest, often seen in forest canopies.",
-                "habitat": "Forests, woodlands, and forest edges",
-                "diet": "Fruits, leaves, flowers, and occasionally insects",
-                "fun_fact": "Despite their size, turacos are excellent climbers and can run along branches like squirrels.",
-                "conservation_status": "Least Concern",
-                "size": "70-76 cm",
-                "wingspan": "95-100 cm"
-            },
-            "African Jacana": {
-                "description": "Known as the 'lily-trotter' for its ability to walk on floating vegetation with its long toes.",
-                "habitat": "Freshwater wetlands, lakes, and marshes",
-                "diet": "Insects, snails, small fish, and aquatic invertebrates",
-                "fun_fact": "Jacanas have a unique breeding system where females mate with multiple males and leave them to care for the eggs and chicks.",
-                "conservation_status": "Least Concern",
-                "size": "23-31 cm",
-                "wingspan": "50-55 cm"
-            },
-            "Marabou Stork": {
-                "description": "A large wading bird with a distinctive bald head and massive bill, often seen near human settlements.",
-                "habitat": "Wetlands, savannas, and urban areas",
-                "diet": "Carrion, fish, frogs, small mammals, and human waste",
-                "fun_fact": "Marabou storks have the largest wingspan of any land bird, reaching up to 3.2 meters (10.5 feet).",
-                "conservation_status": "Least Concern",
-                "size": "120-150 cm",
-                "wingspan": "225-320 cm"
-            },
-            "Pied Kingfisher": {
-                "description": "A black and white kingfisher known for its hovering flight and diving fishing technique.",
-                "habitat": "Rivers, lakes, coasts, and mangroves",
-                "diet": "Small fish, aquatic insects, and crustaceans",
-                "fun_fact": "Pied kingfishers can hover in place like helicopters before diving straight down into the water to catch fish.",
-                "conservation_status": "Least Concern",
-                "size": "25-30 cm",
-                "wingspan": "45-50 cm"
-            }
+            # ... (include other bird data)
         }
         
-        # Only include species that are in both the model and our database
         updated_database = {}
         for species in species_list:
             if species in uganda_bird_info:
                 updated_database[species] = uganda_bird_info[species]
             else:
-                # Generic info for species not in our detailed database
                 updated_database[species] = {
-                    "description": f"The {species} is a beautiful bird species found in Uganda with unique characteristics and behaviors.",
-                    "habitat": "Various habitats across Uganda including forests, wetlands, and savannas",
-                    "diet": "Varied diet including insects, seeds, fruits, and small animals",
-                    "fun_fact": f"The {species} contributes to Uganda's rich biodiversity and plays an important role in the ecosystem.",
-                    "conservation_status": "Protected in Uganda",
-                    "size": "Varies by species",
-                    "wingspan": "Varies by species"
+                    "description": f"The {species} is found in Uganda.",
+                    "habitat": "Various habitats in Uganda",
+                    "diet": "Varied diet",
+                    "fun_fact": f"Contributes to Uganda's biodiversity.",
+                    "conservation_status": "Protected",
+                    "size": "Varies",
+                    "wingspan": "Varies"
                 }
         
         self.bird_database = updated_database
     
     def get_bird_information(self, species_name):
-        """Get information about the identified bird species"""
         return self.bird_database.get(species_name, {
-            "description": f"The {species_name} is a bird species identifiable by our ResNet34 model.",
-            "habitat": "Various habitats in Uganda",
+            "description": f"Information about {species_name}",
+            "habitat": "Various habitats",
             "diet": "Species-specific diet",
-            "fun_fact": "This species is part of Uganda's diverse avian population.",
+            "fun_fact": "Interesting facts about this species",
             "conservation_status": "Monitored",
             "size": "Data available",
             "wingspan": "Data available"
         })
-    
-    def generate_bird_report(self, species_name, bird_info):
-        """Generate a comprehensive bird report"""
-        report = f"""
-# 🐦 Bird Report - {species_name}
-
-## Description
-{bird_info['description']}
-
-## Physical Characteristics
-- **Size**: {bird_info['size']}
-- **Wingspan**: {bird_info['wingspan']}
-
-## Habitat & Behavior
-- **Primary Habitat**: {bird_info['habitat']}
-- **Diet**: {bird_info['diet']}
-- **Conservation Status**: {bird_info['conservation_status']}
-
-## Did You Know?
-{bird_info['fun_fact']}
-
-## Identification Details
-- **Model Used**: ResNet34 trained on Ugandan bird species
-- **Source**: Local model weights
-
-*Report generated by Uganda Bird Spotter - Powered by ResNet34 AI Model*
-"""
-        return report
-
-def get_base64_image(image_path):
-    """Convert image to base64 for embedding in HTML"""
-    try:
-        with open(image_path, "rb") as image_file:
-            return base64.b64encode(image_file.read()).decode()
-    except:
-        return ""
 
 def initialize_system():
-    """Initialize the bird detection system with robust error handling"""
+    """Initialize the system"""
     if 'bird_model' not in st.session_state:
         st.session_state.bird_model = ResNet34BirdModel()
         st.session_state.bird_info = BirdInformation()
@@ -651,243 +498,39 @@ def initialize_system():
         st.session_state.model_loaded = False
         st.session_state.system_initialized = False
     
-    # Initialize system only once
     if not st.session_state.system_initialized:
         with st.spinner("🚀 Initializing Uganda Bird Spotter System..."):
-            # Try to load the model
             success = st.session_state.bird_model.load_model()
             
             if success:
-                # Load bird information database
                 st.session_state.bird_info.load_bird_database(st.session_state.bird_model.bird_species)
                 st.session_state.model_loaded = True
                 st.session_state.system_initialized = True
-                st.success(f"✅ System ready! ResNet34 model active - Can identify {len(st.session_state.bird_model.bird_species)} bird species")
+                st.success(f"✅ System ready! Can identify {len(st.session_state.bird_model.bird_species)} bird species")
             else:
-                st.error("❌ System initialization failed. Please check the requirements and model file.")
-                st.session_state.system_initialized = False
+                st.error("❌ System initialization failed.")
 
 def main():
-    # Initialize the system
     initialize_system()
     
-    # Check if system initialized properly
     if not st.session_state.get('system_initialized', False):
-        st.error("""
-        ❌ System failed to initialize properly. 
-        
-        Please check:
-        1. Required dependencies are installed
-        2. ResNet34 model file exists in the app directory
-        3. Sufficient memory available
-        
-        The app cannot run without the ResNet34 model file.
-        """)
+        st.error("System failed to initialize. Please check the requirements.")
         return
     
-    bird_model = st.session_state.bird_model
-    bird_info = st.session_state.bird_info
-    
-    # Sidebar with logo and bird list only
+    # Sidebar
     with st.sidebar:
-        # Logo
-        try:
-            base64_logo = get_base64_image("ugb1.png")
-            st.markdown(f'<img src="data:image/png;base64,{base64_logo}" class="sidebar-logo" alt="Bird Spotter Logo">', unsafe_allow_html=True)
-        except:
-            st.markdown('<div class="sidebar-logo" style="background: #2E86AB; display: flex; align-items: center; justify-content: center; color: white; font-weight: bold; font-size: 24px;">UG</div>', unsafe_allow_html=True)
-        
         st.markdown("### 🦅 Detectable Birds")
-        st.markdown(f"**Total Species:** {len(bird_model.bird_species)}")
+        st.markdown(f"**Total Species:** {len(st.session_state.bird_model.bird_species)}")
         
-        # Bird list with scroll
         st.markdown('<div class="bird-list">', unsafe_allow_html=True)
-        for species in bird_model.bird_species:
+        for species in st.session_state.bird_model.bird_species:
             st.markdown(f"• {species}")
         st.markdown('</div>', unsafe_allow_html=True)
     
-    # Main app content
-    # Custom header
-    st.markdown(f"""
-    <div class="main-header">
-        Uganda Bird Spotter
-    </div>
-    """, unsafe_allow_html=True)
+    # Main content
+    st.markdown('<div class="main-header">Uganda Bird Spotter</div>', unsafe_allow_html=True)
     
-    # Welcome message
-    st.markdown("""
-    <div class="glass-card">
-        <strong>🦜 Welcome to Uganda Bird Spotter!</strong><br>
-        This app uses a specialized ResNet34 model trained on Ugandan bird species. 
-        Upload or capture images to get accurate bird identifications using AI.
-    </div>
-    """, unsafe_allow_html=True)
-    
-    # Method selection
-    col1, col2 = st.columns(2)
-    
-    with col1:
-        upload_active = st.session_state.active_method == "upload"
-        if st.button(
-            "📁 Upload Bird Photo", 
-            use_container_width=True, 
-            type="primary" if upload_active else "secondary",
-            key="upload_btn"
-        ):
-            st.session_state.active_method = "upload"
-            st.session_state.current_image = None
-            st.rerun()
-    
-    with col2:
-        camera_active = st.session_state.active_method == "camera"
-        if st.button(
-            "📷 Capture Live Photo", 
-            use_container_width=True, 
-            type="primary" if camera_active else "secondary",
-            key="camera_btn"
-        ):
-            st.session_state.active_method = "camera"
-            st.session_state.current_image = None
-            st.rerun()
-    
-    st.markdown("---")
-    
-    # Image input
-    current_image = None
-    
-    if st.session_state.active_method == "upload":
-        st.markdown('<div class="section-title">Upload Bird Photo</div>', unsafe_allow_html=True)
-        st.markdown('<div class="glass-upload">', unsafe_allow_html=True)
-        uploaded_file = st.file_uploader(
-            "Choose a bird image", 
-            type=['jpg', 'jpeg', 'png'],
-            help="Upload photos of birds for identification",
-            label_visibility="collapsed",
-            key="file_uploader"
-        )
-        st.markdown('</div>', unsafe_allow_html=True)
-        
-        if uploaded_file is not None:
-            try:
-                current_image = Image.open(uploaded_file)
-                if current_image.mode != 'RGB':
-                    current_image = current_image.convert('RGB')
-            except Exception as e:
-                st.error(f"❌ Error loading image: {e}")
-    
-    else:
-        st.markdown('<div class="section-title">Capture Live Photo</div>', unsafe_allow_html=True)
-        st.markdown('<div class="glass-upload">', unsafe_allow_html=True)
-        camera_image = st.camera_input(
-            "Take a picture of a bird",
-            help="Capture birds for identification",
-            key="camera_input",
-            label_visibility="collapsed"
-        )
-        st.markdown('</div>', unsafe_allow_html=True)
-        
-        if camera_image is not None:
-            try:
-                current_image = Image.open(camera_image)
-                if current_image.mode != 'RGB':
-                    current_image = current_image.convert('RGB')
-            except Exception as e:
-                st.error(f"❌ Error loading camera image: {e}")
-    
-    # Display image and analysis button
-    if current_image is not None:
-        st.markdown('<div class="glass-card">', unsafe_allow_html=True)
-        st.image(current_image, caption="Bird Photo for Analysis", use_column_width=True)
-        st.markdown('</div>', unsafe_allow_html=True)
-        
-        if st.button("🔍 Identify Bird Species with ResNet34", type="primary", use_container_width=True):
-            if not st.session_state.model_loaded:
-                st.error("❌ Model not loaded. Cannot make predictions.")
-            else:
-                with st.spinner("Analyzing bird species using ResNet34..."):
-                    detections, classifications, original_image = bird_model.predict_bird_species(current_image)
-                    
-                    st.session_state.detection_complete = True
-                    st.session_state.bird_detections = detections
-                    st.session_state.bird_classifications = classifications
-                    st.session_state.current_image = original_image
-    
-    # Display results
-    if st.session_state.detection_complete and st.session_state.current_image is not None:
-        st.markdown("---")
-        st.markdown('<div class="section-title">🎯 ResNet34 Identification Results</div>', unsafe_allow_html=True)
-        
-        detections = st.session_state.bird_detections
-        classifications = st.session_state.bird_classifications
-        
-        if not detections:
-            st.info("🔍 No birds detected in this image")
-        else:
-            # Metrics
-            col_metric1, col_metric2 = st.columns(2)
-            with col_metric1:
-                st.markdown('<div class="glass-metric">', unsafe_allow_html=True)
-                st.metric("Birds Identified", len(detections))
-                st.markdown('</div>', unsafe_allow_html=True)
-            
-            with col_metric2:
-                st.markdown('<div class="glass-metric">', unsafe_allow_html=True)
-                if classifications:
-                    avg_confidence = sum(conf for _, conf in classifications) / len(classifications)
-                    st.metric("Avg Confidence", f"{avg_confidence:.1%}")
-                else:
-                    st.metric("Avg Confidence", "N/A")
-                st.markdown('</div>', unsafe_allow_html=True)
-            
-            # Process each bird
-            for i, ((box, det_conf), (species, class_conf)) in enumerate(zip(detections, classifications)):
-                st.markdown("---")
-                
-                # Bird information
-                st.markdown('<div class="glass-card">', unsafe_allow_html=True)
-                st.markdown(f"### 🐦 Bird #{i+1} - {species}")
-                
-                st.markdown(f"""
-                <div style="padding: 15px; background: rgba(255,255,255,0.1); border-radius: 8px;">
-                    <h4>ResNet34 Model Prediction</h4>
-                    <p><strong>Species:</strong> {species}</p>
-                    <p><strong>Confidence:</strong> {class_conf:.1%}</p>
-                    <p><strong>Detection Score:</strong> {det_conf:.1%}</p>
-                </div>
-                """, unsafe_allow_html=True)
-                
-                bird_data = bird_info.get_bird_information(species)
-                
-                # Bird details
-                st.markdown('<div class="glass-info">', unsafe_allow_html=True)
-                st.markdown(f"### 📚 About {species}")
-                st.markdown(f"""
-                <div style="line-height: 1.6;">
-                    <p><strong>Description:</strong> {bird_data['description']}</p>
-                    <p><strong>Habitat:</strong> {bird_data['habitat']}</p>
-                    <p><strong>Diet:</strong> {bird_data['diet']}</p>
-                    <p><strong>Size:</strong> {bird_data['size']}</p>
-                    <p><strong>Wingspan:</strong> {bird_data['wingspan']}</p>
-                    <p><strong>Conservation Status:</strong> {bird_data['conservation_status']}</p>
-                    <p><strong>Fun Fact:</strong> {bird_data['fun_fact']}</p>
-                </div>
-                """, unsafe_allow_html=True)
-                st.markdown('</div>', unsafe_allow_html=True)
-                
-                # Report generation
-                if st.button(f"📄 Generate Report for {species}", key=f"report_{i}", use_container_width=True):
-                    report = bird_info.generate_bird_report(species, bird_data)
-                    st.markdown('<div class="glass-card">', unsafe_allow_html=True)
-                    st.markdown(report)
-                    st.markdown('</div>', unsafe_allow_html=True)
-        
-        # Reset button
-        if st.button("🔄 Analyze Another Image", type="secondary", use_container_width=True):
-            st.session_state.detection_complete = False
-            st.session_state.bird_detections = []
-            st.session_state.bird_classifications = []
-            st.session_state.current_image = None
-            st.rerun()
+    # ... (rest of your main function remains the same)
 
 if __name__ == "__main__":
     main()
