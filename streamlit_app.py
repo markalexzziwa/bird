@@ -160,6 +160,31 @@ st.markdown("""
         padding: 15px;
         margin: 10px 0;
     }
+    .sidebar-logo {
+        width: 80px;
+        height: 80px;
+        border-radius: 16px;
+        object-fit: cover;
+        margin: 0 auto 20px auto;
+        display: block;
+        box-shadow: 0 4px 15px rgba(0,0,0,0.1);
+    }
+    .bird-list {
+        max-height: 400px;
+        overflow-y: auto;
+        padding-right: 10px;
+    }
+    .bird-list::-webkit-scrollbar {
+        width: 6px;
+    }
+    .bird-list::-webkit-scrollbar-track {
+        background: rgba(255,255,255,0.1);
+        border-radius: 3px;
+    }
+    .bird-list::-webkit-scrollbar-thumb {
+        background: #2E86AB;
+        border-radius: 3px;
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -188,17 +213,14 @@ class ResNet34BirdModel:
         
         for filename in possible_names:
             if os.path.exists(filename):
-                st.info(f"📁 Found model file: {filename}")
                 return filename
         
         # Also check in models subdirectory
         for filename in possible_names:
             model_path = f'./models/{filename}'
             if os.path.exists(model_path):
-                st.info(f"📁 Found model file: {model_path}")
                 return model_path
         
-        st.warning("🔍 No model file found in current directory. Will use demo mode.")
         return None
     
     def check_dependencies(self):
@@ -215,10 +237,19 @@ class ResNet34BirdModel:
         default_species = [
             "African Fish Eagle", "Grey Crowned Crane", "Shoebill Stork", 
             "Lilac-breasted Roller", "Great Blue Turaco", "African Jacana",
+            "Marabou Stork", "Pied Kingfisher", "Superb Starling", "Hadada Ibis",
+            "African Fish Eagle", "Grey Crowned Crane", "Shoebill Stork", 
+            "Lilac-breasted Roller", "Great Blue Turaco", "African Jacana",
             "Marabou Stork", "Pied Kingfisher", "Superb Starling", "Hadada Ibis"
         ]
         
-        label_map = {species: idx for idx, species in enumerate(default_species)}
+        # Remove duplicates while preserving order
+        unique_species = []
+        for species in default_species:
+            if species not in unique_species:
+                unique_species.append(species)
+        
+        label_map = {species: idx for idx, species in enumerate(unique_species)}
         
         # Create directory if it doesn't exist
         os.makedirs(os.path.dirname(self.label_map_path) if os.path.dirname(self.label_map_path) else '.', exist_ok=True)
@@ -227,14 +258,12 @@ class ResNet34BirdModel:
             json.dump(label_map, f, indent=2)
         
         self.inv_label_map = {v: k for k, v in label_map.items()}
-        self.bird_species = default_species
-        st.success(f"✅ Created default label map with {len(self.bird_species)} species")
+        self.bird_species = unique_species
         return True
     
     def load_label_map(self):
         """Load the label map for bird species, create default if missing"""
         if not os.path.exists(self.label_map_path):
-            st.warning("📝 Label map not found, creating default...")
             return self.create_default_label_map()
         
         try:
@@ -243,24 +272,13 @@ class ResNet34BirdModel:
             
             self.inv_label_map = {v: k for k, v in label_map.items()}
             self.bird_species = list(label_map.keys())
-            st.success(f"✅ Loaded {len(self.bird_species)} bird species")
             return True
         except Exception as e:
-            st.error(f"❌ Error loading label map: {e}")
-            st.warning("Creating default label map...")
             return self.create_default_label_map()
     
     def load_model(self):
         """Load the ResNet34 model with weights from local directory"""
         if not self.check_dependencies():
-            st.error("""
-            ❌ PyTorch and torchvision are required but not installed.
-            
-            Please install them first:
-            ```bash
-            pip install torch torchvision pillow
-            ```
-            """)
             # Continue with mock predictions
             self.using_mock_predictions = True
             if self.load_label_map():
@@ -279,14 +297,12 @@ class ResNet34BirdModel:
             
             # Check if model file exists locally
             if self.model_path is None or not os.path.exists(self.model_path):
-                st.warning("🚨 No local model weights found. Using mock predictions for demonstration.")
                 self.using_mock_predictions = True
                 self.model_loaded = True
                 return True
             
             # Initialize device
             self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-            st.info(f"🔄 Using device: {self.device}")
             
             # Create ResNet34 model architecture
             model = models.resnet34(weights=None)
@@ -294,13 +310,6 @@ class ResNet34BirdModel:
             model.fc = nn.Linear(model.fc.in_features, num_classes)
             
             # Load trained weights from local file
-            st.info(f"🔄 Loading model weights from: {self.model_path}")
-            
-            # Get file size for info
-            file_size = os.path.getsize(self.model_path) / (1024 * 1024)
-            st.info(f"📦 Model file size: {file_size:.1f} MB")
-            
-            # Load the state dict
             if torch.cuda.is_available():
                 model.load_state_dict(torch.load(self.model_path))
             else:
@@ -319,12 +328,9 @@ class ResNet34BirdModel:
             
             self.model_loaded = True
             self.using_mock_predictions = False
-            st.success("✅ ResNet34 model loaded successfully from local file!")
             return True
             
         except Exception as e:
-            st.error(f"❌ Model loading error: {e}")
-            st.warning("🔄 Continuing with mock predictions for demonstration")
             self.using_mock_predictions = True
             if self.load_label_map():
                 self.model_loaded = True
@@ -342,24 +348,15 @@ class ResNet34BirdModel:
             
             height, width = image_array.shape[:2]
             
-            if self.using_mock_predictions:
-                st.info("🔍 Scanning image for birds (Mock Mode)...")
-            else:
-                st.info("🔍 Scanning image for birds...")
-            
             # Simple bird detection based on color and edges
-            # This is a simplified version - you might want to replace with actual object detection
             detections = self._simple_bird_detection(image_array)
             
             if detections:
-                st.success(f"✅ Found {len(detections)} bird region(s)")
                 return detections, image_array
             else:
-                st.info("🔍 No birds detected in this image")
                 return [], image_array
                 
         except Exception as e:
-            st.error(f"❌ Error processing image: {e}")
             return [], None
     
     def _simple_bird_detection(self, image_array):
@@ -418,7 +415,6 @@ class ResNet34BirdModel:
             return []
             
         except Exception as e:
-            st.warning(f"OpenCV not available for advanced detection: {e}")
             # Fallback to random detection for demo
             height, width = image_array.shape[:2]
             detections = []
@@ -470,7 +466,6 @@ class ResNet34BirdModel:
             return species, confidence
             
         except Exception as e:
-            st.error(f"❌ Model prediction error: {e}")
             # Fallback to mock prediction
             species = random.choice(self.bird_species)
             confidence = random.uniform(0.6, 0.8)
@@ -479,7 +474,6 @@ class ResNet34BirdModel:
     def predict_bird_species(self, image):
         """Complete prediction pipeline using ResNet34 model"""
         if not self.model_loaded:
-            st.error("❌ Model not loaded. Cannot make predictions.")
             return [], [], None
         
         # Detect bird regions
@@ -508,10 +502,6 @@ class ResNet34BirdModel:
                 
                 if x2 > x1 and y2 > y1:  # Valid crop region
                     bird_region = pil_original.crop((x1, y1, x2, y2))
-                    
-                    # Display the cropped region for debugging
-                    with st.expander(f"View Bird Region {i+1}"):
-                        st.image(bird_region, caption=f"Bird Region {i+1}", use_column_width=True)
                 else:
                     bird_region = pil_original  # Fallback to full image
                 
@@ -520,7 +510,6 @@ class ResNet34BirdModel:
                 classifications.append((species, classification_confidence))
                 
             except Exception as e:
-                st.error(f"❌ Error processing bird region {i+1}: {e}")
                 classifications.append(("Processing Error", 0.0))
         
         return detections, classifications, original_image
@@ -697,14 +686,8 @@ def initialize_system():
                 st.session_state.bird_info.load_bird_database(st.session_state.bird_model.bird_species)
                 st.session_state.model_loaded = True
                 st.session_state.system_initialized = True
-                
-                if st.session_state.bird_model.using_mock_predictions:
-                    st.success(f"✅ System ready in DEMO MODE! Can identify {len(st.session_state.bird_model.bird_species)} bird species")
-                else:
-                    st.success(f"✅ System ready! ResNet34 model active - Can identify {len(st.session_state.bird_model.bird_species)} bird species")
             else:
                 # Even if model loading fails, try to continue with basic functionality
-                st.error("❌ Critical system initialization failed")
                 st.session_state.system_initialized = False
                 
                 # Try a fallback initialization
@@ -715,9 +698,8 @@ def initialize_system():
                         st.session_state.system_initialized = True
                         st.session_state.bird_model.using_mock_predictions = True
                         st.session_state.bird_model.model_loaded = True
-                        st.warning("🔄 System running in limited demo mode")
                 except Exception as e:
-                    st.error(f"❌ Fallback initialization also failed: {e}")
+                    st.session_state.system_initialized = False
 
 def main():
     # Initialize the system
@@ -735,7 +717,7 @@ def main():
         
         Try installing dependencies:
         ```bash
-        pip install torch torchvision pillow streamlit numpy
+        pip install torch torchvision pillow streamlit numpy opencv-python
         ```
         """)
         return
@@ -743,22 +725,33 @@ def main():
     bird_model = st.session_state.bird_model
     bird_info = st.session_state.bird_info
     
-    # Load and display custom logo
-    try:
-        base64_logo = get_base64_image("ugb1.png")
-        logo_html = f'<img src="data:image/png;base64,{base64_logo}" class="title-image" alt="Bird Spotter Logo">'
-    except:
-        logo_html = '<div class="title-image" style="background: #2E86AB; display: flex; align-items: center; justify-content: center; color: white; font-weight: bold;">UG</div>'
+    # Sidebar with logo and bird list only
+    with st.sidebar:
+        # Logo
+        try:
+            base64_logo = get_base64_image("ugb1.png")
+            st.markdown(f'<img src="data:image/png;base64,{base64_logo}" class="sidebar-logo" alt="Bird Spotter Logo">', unsafe_allow_html=True)
+        except:
+            st.markdown('<div class="sidebar-logo" style="background: #2E86AB; display: flex; align-items: center; justify-content: center; color: white; font-weight: bold; font-size: 24px;">UG</div>', unsafe_allow_html=True)
+        
+        st.markdown("### 🦅 Detectable Birds")
+        st.markdown(f"**Total Species:** {len(bird_model.bird_species)}")
+        
+        # Bird list with scroll
+        st.markdown('<div class="bird-list">', unsafe_allow_html=True)
+        for species in bird_model.bird_species:
+            st.markdown(f"• {species}")
+        st.markdown('</div>', unsafe_allow_html=True)
     
+    # Main app content
     # Custom header
     st.markdown(f"""
     <div class="main-header">
-        {logo_html}
         Uganda Bird Spotter
     </div>
     """, unsafe_allow_html=True)
     
-    # System status
+    # System status messages in main app area
     if st.session_state.model_loaded:
         if bird_model.using_mock_predictions:
             st.markdown(f"""
@@ -767,6 +760,9 @@ def main():
                 Install PyTorch and ensure model file is in app directory for real ResNet34 predictions.
             </div>
             """, unsafe_allow_html=True)
+            
+            if bird_model.model_path is None:
+                st.info("🔍 No model file found in current directory. Will use demo mode.")
         else:
             model_file = bird_model.model_path if bird_model.model_path else "Unknown"
             st.markdown(f"""
@@ -792,60 +788,6 @@ def main():
         Upload or capture images to get accurate bird identifications using AI.
     </div>
     """, unsafe_allow_html=True)
-    
-    # Sidebar with model info
-    with st.sidebar:
-        st.markdown("### 🎯 Model Information")
-        
-        if st.session_state.model_loaded:
-            if bird_model.using_mock_predictions:
-                st.warning("🟡 Demo Mode")
-            else:
-                st.success("✅ ResNet34 Loaded")
-                if bird_model.model_path:
-                    st.info(f"**Model File:** {os.path.basename(bird_model.model_path)}")
-            
-            st.metric("Bird Species", len(bird_model.bird_species))
-            
-            st.markdown("### 📋 Detectable Species:")
-            for species in bird_model.bird_species[:8]:  # Show first 8 species
-                st.markdown(f"- {species}")
-            
-            if len(bird_model.bird_species) > 8:
-                st.markdown(f"... and {len(bird_model.bird_species) - 8} more")
-        else:
-            st.error("❌ Model Not Loaded")
-        
-        st.markdown("---")
-        st.markdown("### 🔧 Requirements")
-        st.markdown("""
-        For full ResNet34 functionality:
-        ```bash
-        pip install torch torchvision
-        ```
-        
-        Current mode: **{'Demo' if bird_model.using_mock_predictions else 'Full ResNet34'}**
-        """)
-        
-        # Installation instructions
-        with st.expander("Installation Help"):
-            st.markdown("""
-            **To enable ResNet34 model:**
-            ```bash
-            # Install all dependencies
-            pip install torch torchvision pillow streamlit numpy
-            
-            # For CPU-only (if no GPU)
-            pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
-            ```
-            
-            **Model file should be in the app directory with one of these names:**
-            - resnet34_bird_region_weights.pth
-            - resnet34_weights.pth  
-            - bird_model.pth
-            - model_weights.pth
-            - resnet34.pth
-            """)
     
     # Method selection
     col1, col2 = st.columns(2)
