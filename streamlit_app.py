@@ -32,6 +32,13 @@ st.markdown("""
         justify-content: center;
         gap: 20px;
     }
+    .title-image {
+        width: 80px;
+        height: 80px;
+        border-radius: 16px;
+        object-fit: cover;
+        box-shadow: 0 4px 15px rgba(0,0,0,0.1);
+    }
     .glass-upload {
         background: rgba(255, 255, 255, 0.25);
         backdrop-filter: blur(15px);
@@ -102,17 +109,25 @@ st.markdown("""
         margin: 10px 0;
     }
     .sidebar-logo {
-        width: 80px;
-        height: 80px;
-        border-radius: 16px;
+        width: 100px;
+        height: 100px;
+        border-radius: 20px;
         object-fit: cover;
         margin: 0 auto 20px auto;
         display: block;
+        box-shadow: 0 4px 15px rgba(0,0,0,0.1);
     }
     .bird-list {
         max-height: 400px;
         overflow-y: auto;
         padding-right: 10px;
+    }
+    .sidebar-title {
+        text-align: center;
+        font-size: 1.5rem;
+        color: #2E86AB;
+        font-weight: 700;
+        margin-bottom: 20px;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -556,6 +571,14 @@ class BirdInformation:
 """
         return report
 
+def get_base64_image(image_path):
+    """Convert image to base64 for embedding in HTML"""
+    try:
+        with open(image_path, "rb") as image_file:
+            return base64.b64encode(image_file.read()).decode()
+    except:
+        return ""
+
 def initialize_system():
     """Initialize the bird detection system"""
     if 'bird_model' not in st.session_state:
@@ -605,8 +628,17 @@ def main():
     bird_model = st.session_state.bird_model
     bird_info = st.session_state.bird_info
     
-    # Sidebar with bird list only
+    # Sidebar with logo and bird list
     with st.sidebar:
+        # Logo at the top of sidebar
+        try:
+            base64_logo = get_base64_image("ugb1.png")
+            st.markdown(f'<img src="data:image/png;base64,{base64_logo}" class="sidebar-logo" alt="Bird Spotter Logo">', unsafe_allow_html=True)
+        except:
+            st.markdown('<div class="sidebar-logo" style="background: #2E86AB; display: flex; align-items: center; justify-content: center; color: white; font-weight: bold; font-size: 24px;">UG</div>', unsafe_allow_html=True)
+        
+        st.markdown('<div class="sidebar-title">Uganda Bird Spotter</div>', unsafe_allow_html=True)
+        
         st.markdown("### 🦅 Detectable Birds")
         st.markdown(f"**Total Species:** {len(bird_model.bird_species)}")
         
@@ -617,8 +649,16 @@ def main():
         st.markdown('</div>', unsafe_allow_html=True)
     
     # Main app content
+    # Custom header with logo beside title
+    try:
+        base64_logo = get_base64_image("ugb1.png")
+        logo_html = f'<img src="data:image/png;base64,{base64_logo}" class="title-image" alt="Bird Spotter Logo">'
+    except:
+        logo_html = '<div class="title-image" style="background: #2E86AB; display: flex; align-items: center; justify-content: center; color: white; font-weight: bold;">UG</div>'
+    
     st.markdown(f"""
     <div class="main-header">
+        {logo_html}
         Uganda Bird Spotter
     </div>
     """, unsafe_allow_html=True)
