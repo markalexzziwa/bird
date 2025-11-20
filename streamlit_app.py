@@ -15,9 +15,11 @@ import torch
 import torch.nn as nn
 from gtts import gTTS
 import warnings
+import subprocess
+import sys
 warnings.filterwarnings('ignore')
 
-# Force MoviePy availability - install if needed
+# Force install and import MoviePy
 try:
     from moviepy.editor import (
         AudioFileClip, ImageClip, concatenate_videoclips,
@@ -27,22 +29,28 @@ try:
     from moviepy.video.fx.all import resize
     MOVIEPY_AVAILABLE = True
 except ImportError:
-    # Try to install moviepy
+    # Try to install moviepy automatically
     try:
-        import subprocess
-        import sys
-        subprocess.check_call([sys.executable, "-m", "pip", "install", "moviepy"])
+        st.warning("🎬 MoviePy not found. Installing now...")
+        
+        # Install moviepy and dependencies
+        subprocess.check_call([sys.executable, "-m", "pip", "install", "moviepy", "decorator", "proglog"])
+        
+        # Try to import again after installation
         from moviepy.editor import (
             AudioFileClip, ImageClip, concatenate_videoclips,
             VideoFileClip, concatenate_audioclips
         )
         from moviepy.audio.fx.all import audio_fadein, audio_fadeout
         from moviepy.video.fx.all import resize
+        
         MOVIEPY_AVAILABLE = True
         st.success("✅ MoviePy installed successfully!")
-    except:
+        
+    except Exception as e:
         MOVIEPY_AVAILABLE = False
-        st.error("❌ MoviePy installation failed. Please install manually: pip install moviepy")
+        st.error(f"❌ MoviePy installation failed: {e}")
+        st.info("Please install manually: pip install moviepy decorator proglog")
 
 # Set page configuration
 st.set_page_config(
@@ -210,6 +218,10 @@ class BirdStoryGenerator:
 def download_file_from_gdrive(file_id, destination):
     """Download file from Google Drive with enhanced error handling"""
     try:
+        # Remove existing file if it's too small (corrupted)
+        if os.path.exists(destination) and os.path.getsize(destination) < 1000:
+            os.remove(destination)
+            
         if not os.path.exists(destination):
             st.info(f"📥 Downloading {os.path.basename(destination)} from Google Drive...")
             
@@ -219,100 +231,145 @@ def download_file_from_gdrive(file_id, destination):
                 url = f'https://drive.google.com/uc?id={file_id}'
                 gdown.download(url, destination, quiet=False)
                 
-                # Verify download
-                if os.path.exists(destination) and os.path.getsize(destination) > 1000:
-                    st.success(f"✅ Successfully downloaded {os.path.basename(destination)}!")
-                    return True
-                else:
-                    st.error(f"❌ Downloaded file is corrupted or empty: {os.path.basename(destination)}")
-                    if os.path.exists(destination):
-                        os.remove(destination)
-                    return False
-                    
             except ImportError:
-                st.warning("gdown not available, trying requests...")
-                # Method 2: Using requests with cookie handling
-                session = requests.Session()
-                
-                # First, get the confirmation token
-                url = f"https://docs.google.com/uc?export=download&id={file_id}"
-                response = session.get(url, stream=True)
-                
-                # Check for download confirmation
-                for key, value in response.cookies.items():
-                    if key.startswith('download_warning'):
-                        # Need to confirm the download
-                        params = {'confirm': value, 'id': file_id}
-                        response = session.get(url, params=params, stream=True)
-                        break
-                
-                # Download with progress
-                total_size = int(response.headers.get('content-length', 0))
-                block_size = 8192
-                progress_bar = st.progress(0)
-                status_text = st.empty()
-                
-                with open(destination, 'wb') as f:
-                    downloaded = 0
-                    for chunk in response.iter_content(chunk_size=block_size):
-                        if chunk:
-                            f.write(chunk)
-                            downloaded += len(chunk)
-                            if total_size > 0:
-                                progress = min(downloaded / total_size, 1.0)
-                                progress_bar.progress(progress)
-                                status_text.text(f"Downloaded: {downloaded/(1024*1024):.1f} MB / {total_size/(1024*1024):.1f} MB")
-                
-                progress_bar.empty()
-                status_text.empty()
-                
-                # Verify download
-                if os.path.exists(destination) and os.path.getsize(destination) > 1000:
-                    st.success(f"✅ Successfully downloaded {os.path.basename(destination)}!")
-                    return True
-                else:
-                    st.error(f"❌ Downloaded file is corrupted or empty: {os.path.basename(destination)}")
-                    if os.path.exists(destination):
-                        os.remove(destination)
+                # Method 2: Using requests
+                try:
+                    session = requests.Session()
+                    url = f"https://docs.google.com/uc?export=download&id={file_id}"
+                    response = session.get(url, stream=True)
+                    
+                    # Handle confirmation for large files
+                    for key, value in response.cookies.items():
+                        if key.startswith('download_warning'):
+                            params = {'confirm': value}
+                            response = session.get(url, params=params, stream=True)
+                            break
+                    
+                    # Download with progress
+                    total_size = int(response.headers.get('content-length', 0))
+                    block_size = 8192
+                    progress_bar = st.progress(0)
+                    status_text = st.empty()
+                    
+                    with open(destination, 'wb') as f:
+                        downloaded = 0
+                        for chunk in response.iter_content(chunk_size=32768):
+                            if chunk:
+                                f.write(chunk)
+                                downloaded += len(chunk)
+                                if total_size > 0:
+                                    progress = min(downloaded / total_size, 1.0)
+                                    progress_bar.progress(progress)
+                                    status_text.text(f"Downloaded: {downloaded/(1024*1024):.1f} MB / {total_size/(1024*1024):.1f} MB")
+                    
+                    progress_bar.empty()
+                    status_text.empty()
+                    
+                except Exception as e:
+                    st.error(f"❌ Requests download failed: {e}")
                     return False
+            
+            # Verify download
+            if os.path.exists(destination) and os.path.getsize(destination) > 1000:
+                file_size = os.path.getsize(destination) / (1024 * 1024)
+                st.success(f"✅ Downloaded {os.path.basename(destination)} ({file_size:.1f} MB)")
+                return True
+            else:
+                if os.path.exists(destination):
+                    os.remove(destination)
+                st.error(f"❌ Downloaded file is too small or corrupted: {os.path.basename(destination)}")
+                return False
         
         # If file already exists
         if os.path.exists(destination):
             file_size = os.path.getsize(destination) / (1024 * 1024)
-            if file_size > 0.1:  # Ensure file is not empty/corrupted
+            if file_size > 0.1:
                 st.info(f"✅ {os.path.basename(destination)} already exists ({file_size:.1f} MB)")
                 return True
             else:
-                st.error(f"❌ {os.path.basename(destination)} is too small - may be corrupted")
                 os.remove(destination)
                 return False
-        else:
-            st.error(f"❌ Failed to download {os.path.basename(destination)}")
-            return False
-            
+                
     except Exception as e:
         st.error(f"❌ Download error for {os.path.basename(destination)}: {e}")
         return False
+    
+    return True
 
 # ========== BIRD DATA LOADING WITH DOWNLOAD ==========
 @st.cache_resource
 def load_bird_data():
     """Load bird data with download from Google Drive"""
     pth_path = "bird_data.pth"
-    file_id = "YOUR_BIRD_DATA_FILE_ID"  # You need to provide this file ID
     
-    # Download the file if it doesn't exist
+    # If bird_data.pth doesn't exist, download it
     if not os.path.exists(pth_path):
-        st.warning("bird_data.pth not found. Please provide the Google Drive file ID for bird_data.pth")
-        return {}
+        st.info("📥 Downloading bird_data.pth from Google Drive...")
+        
+        # Try multiple possible file IDs for bird_data.pth
+        possible_file_ids = [
+            "1J9T5r5TboWzvqAPQHmfvQmozor_wmmPz",  # Your bird_path.pth ID
+            "1yfiYcz6e2hWtQTXW6AZVU-iwSUjDP92y",  # Your resnet model ID
+        ]
+        
+        success = False
+        for file_id in possible_file_ids:
+            st.info(f"🔄 Trying file ID: {file_id}...")
+            success = download_file_from_gdrive(file_id, pth_path)
+            if success:
+                st.success("✅ bird_data.pth downloaded successfully!")
+                break
+            else:
+                st.warning(f"❌ Failed with file ID: {file_id}")
+        
+        if not success:
+            st.error("❌ Could not download bird_data.pth from any source.")
+            st.info("🔄 Creating minimal bird data for testing...")
+            return create_minimal_bird_data()
     
     try:
         bird_data = torch.load(pth_path, map_location="cpu")
-        st.success(f"✅ Loaded bird data with {len(bird_data)} species")
-        return bird_data
+        if isinstance(bird_data, dict) and len(bird_data) > 0:
+            st.success(f"✅ Loaded bird data with {len(bird_data)} species")
+            return bird_data
+        else:
+            st.error("❌ bird_data.pth is empty or invalid")
+            return create_minimal_bird_data()
     except Exception as e:
         st.error(f"❌ Error loading bird data: {e}")
-        return {}
+        return create_minimal_bird_data()
+
+def create_minimal_bird_data():
+    """Create minimal bird data if download fails"""
+    minimal_data = {
+        "African Fish Eagle": {
+            "desc": "A majestic bird of prey found near water bodies",
+            "colors": ["white", "brown", "black"],
+            "images_b64": []
+        },
+        "Grey Crowned Crane": {
+            "desc": "National bird of Uganda with golden crown",
+            "colors": ["grey", "white", "gold"],
+            "images_b64": []
+        },
+        "Shoebill Stork": {
+            "desc": "Large stork-like bird with shoe-shaped bill",
+            "colors": ["blue-grey", "white"],
+            "images_b64": []
+        },
+        "Lilac-breasted Roller": {
+            "desc": "Colorful bird with vibrant plumage",
+            "colors": ["lilac", "blue", "green", "brown"],
+            "images_b64": []
+        },
+        "Great Blue Turaco": {
+            "desc": "Large blue bird with distinctive crest",
+            "colors": ["blue", "green", "red"],
+            "images_b64": []
+        }
+    }
+    st.warning("⚠️ Using minimal bird data for testing")
+    return minimal_data
 
 # Load bird data at startup
 bird_db = load_bird_data()
@@ -370,17 +427,13 @@ class AdvancedVideoGenerator:
         try:
             # Extract story generator from model data
             if hasattr(video_model_data, 'generate_story'):
-                st.success("✅ Using advanced story generation model from bird_path.pth")
                 return video_model_data
             elif isinstance(video_model_data, dict) and 'story_generator' in video_model_data:
-                st.success("✅ Using story generator from bird_path.pth model data")
                 return video_model_data['story_generator']
             elif isinstance(video_model_data, dict) and 'templates' in video_model_data:
-                st.success("✅ Using custom templates from bird_path.pth")
                 return BirdStoryGenerator(video_model_data['templates'])
             else:
                 # If it's just the story generator itself
-                st.success("✅ Using story generator directly from bird_path.pth")
                 return BirdStoryGenerator(TEMPLATES)
         except Exception as e:
             st.error(f"❌ CRITICAL: Could not initialize story generator from bird_path.pth: {e}")
@@ -491,7 +544,7 @@ class AdvancedVideoGenerator:
     def create_final_video(self, images, audio_path, output_path):
         """Create final video with Ken Burns effect and audio - FORCE MoviePy"""
         if not self.moviepy_available:
-            st.error("❌ MoviePy is required but not available. Please install: pip install moviepy")
+            st.error("❌ MoviePy is required but not available.")
             return None
         
         try:
@@ -1014,7 +1067,7 @@ def main():
         if video_generator.moviepy_available:
             st.success("🎥 Using MoviePy (Ken Burns effect)")
         else:
-            st.error("❌ MoviePy not available - install with: pip install moviepy")
+            st.error("❌ MoviePy not available")
     
     # Main app content
     # Custom header with logo beside title
