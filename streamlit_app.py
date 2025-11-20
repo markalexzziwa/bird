@@ -1,6 +1,6 @@
 import streamlit as st
 import numpy as np
-from PIL import Image
+from PIL import Image, ImageDraw, ImageFont
 import tempfile
 import os
 import base64
@@ -8,9 +8,7 @@ from io import BytesIO
 import json
 import random
 import requests
-import urllib.request
 import pandas as pd
-import cv2
 import torch
 import torch.nn as nn
 from gtts import gTTS
@@ -27,7 +25,7 @@ def ensure_moviepy_installation():
         'decorator': 'decorator', 
         'proglog': 'proglog',
         'imageio': 'imageio',
-        'imageio-ffmpeg': 'imageio-ffmpeg'
+        'imageio-ffmpeg': 'imageio_ffmpeg'
     }
     
     missing_packages = []
@@ -47,7 +45,7 @@ def ensure_moviepy_installation():
                 ])
             st.success("✅ All MoviePy dependencies installed successfully!")
             
-            # Reload required modules
+            # Clear import caches
             import importlib
             importlib.invalidate_caches()
             
@@ -251,7 +249,7 @@ class BirdStoryGenerator:
         tmpl = random.choice(self.templates)
         return tmpl.format(name=name, color_phrase=color_phrase, desc=desc)
 
-# ========== ENHANCED MOVIEPY VIDEO GENERATOR ==========
+# ========== ENHANCED MOVIEPY VIDEO GENERATOR (NO OPENCV) ==========
 class AdvancedVideoGenerator:
     def __init__(self):
         self.csv_path = './birdsuganda.csv'
@@ -321,52 +319,8 @@ class AdvancedVideoGenerator:
             st.error(f"❌ Error generating speech: {e}")
             return None
 
-    def ken_burns_effect(self, image_path, duration=4.0, zoom_ratio=1.1):
-        """Apply Ken Burns effect to an image clip"""
-        try:
-            # Load image clip
-            clip = ImageClip(image_path).set_duration(duration)
-            
-            # Get original dimensions
-            w, h = clip.size
-            
-            # Apply zoom effect
-            def make_frame(t):
-                """Calculate zoom factor for each frame"""
-                zoom_factor = 1 + (zoom_ratio - 1) * (t / duration)
-                new_w = int(w * zoom_factor)
-                new_h = int(h * zoom_factor)
-                
-                # Resize frame
-                frame = clip.get_frame(t)
-                frame_resized = cv2.resize(frame, (new_w, new_h))
-                
-                # Calculate position for panning effect
-                x_offset = int((new_w - w) * (t / duration) * 0.3)
-                y_offset = int((new_h - h) * (t / duration) * 0.2)
-                
-                # Crop to original size with offset
-                if new_w > w and new_h > h:
-                    frame_cropped = frame_resized[y_offset:y_offset+h, x_offset:x_offset+w]
-                    if frame_cropped.shape[0] == h and frame_cropped.shape[1] == w:
-                        return frame_cropped
-                
-                return cv2.resize(frame, (w, h))
-            
-            # Create final clip with effects
-            final_clip = clip.fl(lambda gf, t: make_frame(t))
-            final_clip = final_clip.set_duration(duration)
-            final_clip = final_clip.fadein(0.5).fadeout(0.5)
-            
-            return final_clip
-            
-        except Exception as e:
-            st.error(f"❌ Ken Burns effect error: {e}")
-            # Return simple image clip as fallback
-            return ImageClip(image_path).set_duration(duration).fadein(0.3).fadeout(0.3)
-
     def create_moviepy_video(self, images, audio_path, output_path):
-        """Create video using MoviePy with enhanced effects"""
+        """Create video using MoviePy with enhanced effects (No OpenCV)"""
         if not self.moviepy_available:
             st.error("❌ MoviePy is not available for video creation")
             return None
@@ -401,14 +355,22 @@ class AdvancedVideoGenerator:
             
             st.info(f"🎬 Creating {num_images} clips with {duration_per_image:.1f}s each...")
             
-            # Create video clips with Ken Burns effect
+            # Create video clips with simple zoom effect using MoviePy
             video_clips = []
             progress_bar = st.progress(0)
             
             for i, image_path in enumerate(images):
                 try:
-                    # Create clip with Ken Burns effect
-                    clip = self.ken_burns_effect(image_path, duration_per_image)
+                    # Create clip with simple zoom effect using MoviePy's resize
+                    clip = ImageClip(image_path).set_duration(duration_per_image)
+                    
+                    # Apply simple zoom effect using MoviePy only
+                    zoom_factor = 1.1
+                    clip = clip.resize(lambda t: 1 + (zoom_factor - 1) * t / duration_per_image)
+                    
+                    # Add fade effects
+                    clip = clip.fadein(0.5).fadeout(0.5)
+                    
                     video_clips.append(clip)
                     
                     # Update progress
@@ -511,40 +473,66 @@ class AdvancedVideoGenerator:
             return [placeholder_path]
 
     def create_placeholder_image(self, species_name, output_path, variation=0):
-        """Create a placeholder image when no real images are available"""
+        """Create a placeholder image using PIL only (No OpenCV)"""
         try:
-            # Create a simple image with bird name
-            img = np.zeros((400, 600, 3), dtype=np.uint8)
+            # Create image with PIL
+            width, height = 600, 400
+            img = Image.new('RGB', (width, height), color='white')
+            draw = ImageDraw.Draw(img)
             
             # Different background colors for variations
             colors = [
-                [70, 130, 180],   # Steel blue
-                [60, 179, 113],   # Medium sea green
-                [186, 85, 211],   # Medium orchid
-                [255, 165, 0],    # Orange
-                [106, 90, 205]    # Slate blue
+                (70, 130, 180),   # Steel blue
+                (60, 179, 113),   # Medium sea green
+                (186, 85, 211),   # Medium orchid
+                (255, 165, 0),    # Orange
+                (106, 90, 205)    # Slate blue
             ]
             
             bg_color = colors[variation % len(colors)]
-            img[:, :] = bg_color
+            draw.rectangle([0, 0, width, height], fill=bg_color)
+            
+            # Try to use a font, fallback to default
+            try:
+                # Try to use a larger font
+                font = ImageFont.truetype("Arial", size=24)
+                small_font = ImageFont.truetype("Arial", size=16)
+            except:
+                try:
+                    font = ImageFont.load_default()
+                    small_font = ImageFont.load_default()
+                except:
+                    font = None
+                    small_font = None
             
             # Add text
-            font = cv2.FONT_HERSHEY_SIMPLEX
             text = species_name
-            text_size = cv2.getTextSize(text, font, 0.8, 2)[0]
-            text_x = (600 - text_size[0]) // 2
-            text_y = (400 + text_size[1]) // 2
+            if font:
+                # Calculate text size
+                bbox = draw.textbbox((0, 0), text, font=font)
+                text_width = bbox[2] - bbox[0]
+                text_height = bbox[3] - bbox[1]
+                
+                text_x = (width - text_width) // 2
+                text_y = (height - text_height) // 2
+                
+                draw.text((text_x, text_y), text, fill='white', font=font)
+                
+                # Add additional text
+                draw.text((200, 250), f"Bird Image {variation + 1}", fill=(200, 200, 200), font=small_font)
+                draw.text((180, 300), "Uganda Bird Spotter", fill=(220, 220, 220), font=small_font)
+            else:
+                # Fallback without font
+                draw.text((width//2 - 100, height//2 - 10), text, fill='white')
+                draw.text((200, 250), f"Bird Image {variation + 1}", fill=(200, 200, 200))
+                draw.text((180, 300), "Uganda Bird Spotter", fill=(220, 220, 220))
             
-            cv2.putText(img, text, (text_x, text_y), font, 0.8, (255, 255, 255), 2)
-            cv2.putText(img, f"Bird Image {variation + 1}", (200, 250), font, 0.6, (200, 200, 200), 1)
-            cv2.putText(img, "Uganda Bird Spotter", (180, 300), font, 0.5, (220, 220, 220), 1)
-            
-            # Add simple bird shape
+            # Add simple bird shape (ellipses)
             center_x, center_y = 300, 150
-            cv2.ellipse(img, (center_x, center_y), (40, 25), 0, 0, 360, (255, 255, 255), -1)
-            cv2.ellipse(img, (center_x, center_y - 20), (20, 20), 0, 0, 360, (255, 255, 255), -1)
+            draw.ellipse([center_x-40, center_y-25, center_x+40, center_y+25], fill='white')
+            draw.ellipse([center_x-20, center_y-45, center_x+20, center_y-5], fill='white')
             
-            cv2.imwrite(output_path, img)
+            img.save(output_path, "JPEG")
             return True
         except Exception as e:
             st.error(f"❌ Error creating placeholder: {e}")
