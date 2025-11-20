@@ -193,6 +193,19 @@ st.markdown("""
         margin: 15px 0;
         border-left: 4px solid #FFD700;
     }
+    .image-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+        gap: 10px;
+        margin: 15px 0;
+    }
+    .image-grid img {
+        width: 100%;
+        height: 120px;
+        object-fit: cover;
+        border-radius: 8px;
+        border: 2px solid #2E86AB;
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -333,6 +346,14 @@ def load_video_model():
     try:
         model_data = torch.load(pth_path, map_location="cpu")
         st.success("✅ Video story model loaded successfully!")
+        
+        # Display information about loaded model data
+        if isinstance(model_data, dict):
+            st.info(f"📁 Model contains data for {len(model_data)} bird species")
+            # Show sample of what's in the model
+            sample_species = list(model_data.keys())[:3]
+            st.info(f"📸 Sample species: {', '.join(sample_species)}")
+            
         return model_data
     except Exception as e:
         st.warning(f"❌ Error loading video model: {e}. Using default story generation.")
@@ -498,7 +519,7 @@ def create_enhanced_video(images, audio_path, output_path, video_style="ken_burn
                 elif video_style == "simple_fade":
                     # Simple crossfade between images
                     clip = ImageClip(img_path).set_duration(img_duration)
-                    clip = clip.fadein(0.5).fadeout(0.5)
+                    clip = clip.crossfadein(0.5).crossfadeout(0.5)
                 elif video_style == "zoom_only":
                     # Zoom only effect
                     clip = ImageClip(img_path).set_duration(img_duration)
@@ -524,7 +545,13 @@ def create_enhanced_video(images, audio_path, output_path, video_style="ken_burn
             return create_slideshow_video_opencv(images, audio_path, output_path)
         
         # Combine clips with crossfade
-        video = concatenate_videoclips(clips, method="compose", padding=-0.5)  # Crossfade between clips
+        if video_style == "simple_fade":
+            # For crossfade style, use compose method with padding
+            video = concatenate_videoclips(clips, method="compose", padding=-0.5)
+        else:
+            # For other styles, use regular concatenation
+            video = concatenate_videoclips(clips, method="compose")
+            
         video = video.set_audio(narration)
         
         # Enhance video quality
@@ -648,10 +675,104 @@ class AdvancedVideoGenerator:
             st.error(f"❌ Error generating speech: {e}")
             return None
 
-    def get_bird_images(self, species_name, max_images=5):
-        """Get bird images for the species - ALWAYS return some images"""
+    def extract_images_from_model_data(self, species_name):
+        """Extract images for a species from the video model data"""
         try:
-            # First try to get images from bird_db if available
+            if video_model_data is None:
+                return None
+                
+            # Check if model data contains image information for this species
+            if isinstance(video_model_data, dict):
+                # Case 1: Model data is a dictionary with species as keys
+                if species_name in video_model_data:
+                    species_data = video_model_data[species_name]
+                    return self._process_species_images(species_data, species_name)
+                
+                # Case 2: Try case-insensitive matching
+                species_lower = species_name.lower()
+                for key in video_model_data.keys():
+                    if key.lower() == species_lower:
+                        species_data = video_model_data[key]
+                        return self._process_species_images(species_data, species_name)
+                
+                # Case 3: Try partial matching
+                for key in video_model_data.keys():
+                    if species_lower in key.lower() or key.lower() in species_lower:
+                        species_data = video_model_data[key]
+                        return self._process_species_images(species_data, species_name)
+            
+            return None
+            
+        except Exception as e:
+            st.error(f"❌ Error extracting images from model: {e}")
+            return None
+
+    def _process_species_images(self, species_data, species_name):
+        """Process species data to extract images"""
+        try:
+            image_paths = []
+            
+            # Case 1: Data contains base64 encoded images
+            if isinstance(species_data, dict) and 'images_b64' in species_data:
+                for i, b64 in enumerate(species_data['images_b64']):
+                    try:
+                        img_data = base64.b64decode(b64)
+                        img = Image.open(BytesIO(img_data))
+                        temp_path = f"./temp_model_{species_name.replace(' ', '_')}_{i}.jpg"
+                        img.save(temp_path, "JPEG")
+                        image_paths.append(temp_path)
+                    except Exception as e:
+                        st.warning(f"⚠️ Could not decode image {i} for {species_name}: {e}")
+                        continue
+            
+            # Case 2: Data contains image paths or PIL images
+            elif isinstance(species_data, dict) and 'images' in species_data:
+                for i, img_item in enumerate(species_data['images']):
+                    try:
+                        if isinstance(img_item, str):
+                            # It's a file path
+                            if os.path.exists(img_item):
+                                image_paths.append(img_item)
+                        elif hasattr(img_item, 'save'):
+                            # It's a PIL Image
+                            temp_path = f"./temp_model_{species_name.replace(' ', '_')}_{i}.jpg"
+                            img_item.save(temp_path, "JPEG")
+                            image_paths.append(temp_path)
+                    except Exception as e:
+                        st.warning(f"⚠️ Could not process image {i} for {species_name}: {e}")
+                        continue
+            
+            # Case 3: Data is a list of images
+            elif isinstance(species_data, list):
+                for i, img_item in enumerate(species_data):
+                    try:
+                        if hasattr(img_item, 'save'):
+                            # It's a PIL Image
+                            temp_path = f"./temp_model_{species_name.replace(' ', '_')}_{i}.jpg"
+                            img_item.save(temp_path, "JPEG")
+                            image_paths.append(temp_path)
+                    except Exception as e:
+                        st.warning(f"⚠️ Could not process list image {i} for {species_name}: {e}")
+                        continue
+            
+            return image_paths if image_paths else None
+            
+        except Exception as e:
+            st.error(f"❌ Error processing species images: {e}")
+            return None
+
+    def get_bird_images(self, species_name, max_images=5):
+        """Get bird images for the species - prioritize model data, then fallbacks"""
+        try:
+            # First try to get images from the video model data
+            model_images = self.extract_images_from_model_data(species_name)
+            if model_images:
+                st.success(f"✅ Found {len(model_images)} images from model data")
+                # Limit to max_images and ensure we have variety
+                selected_images = self._select_best_images(model_images, max_images)
+                return selected_images
+            
+            # Fallback to bird_db if available
             if species_name in bird_db and bird_db[species_name].get("images_b64"):
                 image_paths = []
                 for i, b64 in enumerate(bird_db[species_name]["images_b64"][:max_images]):
@@ -665,9 +786,11 @@ class AdvancedVideoGenerator:
                         continue
                 
                 if image_paths:
+                    st.info(f"ℹ️ Using {len(image_paths)} images from bird database")
                     return image_paths
             
-            # Fallback: Create placeholder images
+            # Final fallback: Create placeholder images
+            st.warning(f"⚠️ No images found for {species_name}, using placeholders")
             image_paths = []
             for i in range(max_images):
                 placeholder_path = f"./temp_placeholder_{species_name.replace(' ', '_')}_{i}.jpg"
@@ -682,6 +805,41 @@ class AdvancedVideoGenerator:
             placeholder_path = f"./temp_fallback_{species_name.replace(' ', '_')}.jpg"
             self.create_placeholder_image(species_name, placeholder_path)
             return [placeholder_path]
+
+    def _select_best_images(self, images, max_count):
+        """Select the best images for video creation"""
+        try:
+            # If we have fewer images than max_count, return all
+            if len(images) <= max_count:
+                return images
+            
+            # Otherwise, select a diverse set
+            # Prefer images that are different from each other
+            selected = []
+            
+            # Always include the first image
+            selected.append(images[0])
+            
+            # Try to select images that are likely to be different
+            # This is a simple approach - in production you might want to use image similarity
+            step = max(1, len(images) // max_count)
+            for i in range(1, max_count):
+                idx = min(i * step, len(images) - 1)
+                if images[idx] not in selected:
+                    selected.append(images[idx])
+            
+            # If we still don't have enough, add remaining ones
+            while len(selected) < max_count and len(selected) < len(images):
+                for img in images:
+                    if img not in selected:
+                        selected.append(img)
+                        break
+            
+            return selected[:max_count]
+            
+        except Exception as e:
+            st.warning(f"⚠️ Error selecting best images: {e}")
+            return images[:max_count]
 
     def create_placeholder_image(self, species_name, output_path, variation=0):
         """Create a placeholder image when no real images are available"""
@@ -764,11 +922,15 @@ class AdvancedVideoGenerator:
             
             # Get bird images - ALWAYS get images
             st.info("🖼️ Gathering bird images...")
-            bird_images = self.get_bird_images(species_name, max_images=3)  # Reduced for stability
+            bird_images = self.get_bird_images(species_name, max_images=5)  # Increased for better variety
             
             if not bird_images:
                 st.error("❌ No bird images available")
                 return None, None, None
+            
+            # Display the selected images
+            st.info(f"🎨 Selected {len(bird_images)} images for video")
+            self._display_image_grid(bird_images, species_name)
             
             # Generate video
             st.info("🎬 Creating story video...")
@@ -792,6 +954,25 @@ class AdvancedVideoGenerator:
         except Exception as e:
             st.error(f"❌ Story video generation error: {e}")
             return None, None, None
+
+    def _display_image_grid(self, image_paths, species_name):
+        """Display a grid of images being used in the video"""
+        try:
+            st.markdown(f"### 🖼️ Images of {species_name}")
+            
+            # Create columns for image display
+            cols = st.columns(min(4, len(image_paths)))
+            
+            for idx, img_path in enumerate(image_paths):
+                with cols[idx % len(cols)]:
+                    try:
+                        img = Image.open(img_path)
+                        st.image(img, caption=f"Image {idx + 1}", use_column_width=True)
+                    except Exception as e:
+                        st.error(f"❌ Could not display image {idx + 1}")
+            
+        except Exception as e:
+            st.warning(f"⚠️ Could not display image grid: {e}")
 
     def generate_video(self, species_name, video_style="ken_burns"):
         """Main video generation function with story and audio"""
@@ -1045,6 +1226,7 @@ def cleanup_temp_files():
                 os.remove(temp_file)
             except:
                 pass
+        st.success(f"✅ Cleaned up {len(temp_files)} temporary files")
     except Exception as e:
         st.warning(f"⚠️ Could not clean up temp files: {e}")
 
@@ -1097,7 +1279,12 @@ def initialize_system():
                 st.session_state.model_loaded = True
                 st.session_state.system_initialized = True
                 st.success(f"✅ System ready! Can identify {len(st.session_state.bird_model.bird_species)} bird species")
-                st.info("📖 Story video generation available")
+                
+                # Show information about available bird images
+                if video_model_data is not None and isinstance(video_model_data, dict):
+                    st.info(f"📸 Video model contains images for {len(video_model_data)} bird species")
+                else:
+                    st.info("📖 Story video generation available with placeholder images")
             else:
                 st.error("❌ System initialization failed. Please check the requirements and internet connection.")
 
@@ -1144,17 +1331,23 @@ def main():
         
         # Video model status
         st.markdown("---")
-        st.success("🎬 Story Video Generation: **Available**")
-        st.info("📖 Generates: Stories + Audio + Video")
-        if not video_generator.moviepy_available:
-            st.warning("🎥 Using OpenCV video creation")
+        if video_model_data is not None:
+            st.success("🎬 Story Video Generation: **Available**")
+            if isinstance(video_model_data, dict):
+                st.info(f"📸 Contains images for {len(video_model_data)} species")
         else:
-            st.success("🎥 Using MoviePy (Ken Burns effect)")
+            st.warning("🎬 Story Video: **Basic Mode**")
+            st.info("📖 Using placeholder images")
+        
+        if not video_generator.moviepy_available:
+            st.warning("🎥 Video Engine: OpenCV slideshow")
+        else:
+            st.success("🎥 Video Engine: MoviePy (Ken Burns effect)")
         
         # Cleanup button
         if st.button("🧹 Clean Temporary Files", use_container_width=True):
             cleanup_temp_files()
-            st.success("✅ Temporary files cleaned!")
+            st.rerun()
     
     # Main app content
     # Custom header with logo beside title
@@ -1418,17 +1611,6 @@ def main():
         if st.session_state.get('generated_story'):
             st.markdown(f'<div class="story-box"><strong>📖 AI-Generated Story:</strong><br>{st.session_state.generated_story}</div>', unsafe_allow_html=True)
         
-        # Display used images
-        if st.session_state.get('used_images'):
-            st.markdown(f"**🖼️ Used {len(st.session_state.used_images)} images in the video:**")
-            cols = st.columns(min(3, len(st.session_state.used_images)))
-            for idx, img_path in enumerate(st.session_state.used_images):
-                with cols[idx % 3]:
-                    try:
-                        st.image(img_path, use_column_width=True)
-                    except:
-                        st.info(f"Image {idx+1}")
-        
         # Display video
         try:
             with open(st.session_state.generated_video_path, "rb") as video_file:
@@ -1438,7 +1620,7 @@ def main():
             
             # Video information
             video_type = "MoviePy with Ken Burns" if video_generator.moviepy_available else "OpenCV slideshow"
-            st.info(f"**Video Details:** {st.session_state.selected_species_for_video} | {video_type} | Audio Narration")
+            st.info(f"**Video Details:** {st.session_state.selected_species_for_video} | {video_type} | {len(st.session_state.used_images)} images | Audio Narration")
             
             # Download buttons
             col1, col2 = st.columns(2)
