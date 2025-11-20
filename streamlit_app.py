@@ -224,6 +224,8 @@ st.markdown("""
         padding: 20px;
         margin: 15px 0;
         border-left: 4px solid #FFD700;
+        font-size: 1.1rem;
+        line-height: 1.6;
     }
     .image-grid {
         display: grid;
@@ -241,18 +243,27 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# Story templates from your code
+# Enhanced Story templates with more detailed content
 TEMPLATES = [
-    "Deep in Uganda's lush forests, the {name} flashes its {color_phrase} feathers. {desc} It dances on branches at dawn, a true jewel of the Pearl of Africa.",
-    "Along the Nile's banks, the {name} stands tall with {color_phrase} plumage. {desc} Fishermen smile when they hear its melodic call at sunrise.",
-    "In Queen Elizabeth National Park, the {name} soars above acacia trees. {desc} Its {color_phrase} wings catch the golden light of the savanna.",
-    "Near Lake Victoria, the {name} perches quietly. {desc} Children in fishing villages know its {color_phrase} colors mean good luck for the day.",
-    "High in the Rwenzori Mountains, the {name} sings through mist. {desc} Its {color_phrase} feathers shine like emeralds in the cloud forest.",
-    "In Murchison Falls, the {name} glides over roaring waters. {desc} Tourists gasp at its {color_phrase} beauty against the dramatic backdrop.",
-    "Among papyrus swamps, the {name} wades gracefully. {desc} Its long legs and {color_phrase} crest make it the king of the wetlands.",
-    "At sunset in Kidepo Valley, the {name} calls across the plains. {desc} Its {color_phrase} silhouette is a symbol of Uganda's wild heart.",
-    "In Bwindi's ancient rainforest, the {name} flits between vines. {desc} Gorilla trackers pause to admire its {color_phrase} brilliance.",
-    "By the shores of Lake Mburo, the {name} reflects in calm waters. {desc} Its {color_phrase} feathers mirror the peace of the savanna night."
+    "Deep in Uganda's lush forests, the magnificent {name} flashes its {color_phrase} feathers as it moves gracefully through the canopy. {desc} This remarkable bird plays a vital role in Uganda's ecosystem, helping to disperse seeds and control insect populations. Local communities have long cherished sightings of this beautiful creature, considering it a symbol of natural harmony and ecological balance in the Pearl of Africa.",
+    
+    "Along the majestic Nile's banks, the elegant {name} stands tall with its stunning {color_phrase} plumage shimmering in the morning light. {desc} Fishermen along the riverbanks often pause their work to admire this bird's graceful movements and listen to its melodic calls that echo across the water. The species has adapted perfectly to its riverine habitat, demonstrating nature's incredible ability to thrive in specific environments.",
+    
+    "In the vast expanse of Queen Elizabeth National Park, the {name} soars majestically above ancient acacia trees, its {color_phrase} wings creating beautiful patterns against the golden savanna sky. {desc} Conservationists have documented how this bird contributes significantly to the park's biodiversity, making it an essential species for maintaining the ecological balance of this protected area that attracts nature enthusiasts from around the world.",
+    
+    "Near the tranquil shores of Lake Victoria, Africa's largest lake, the {name} perches quietly observing its surroundings with keen awareness. {desc} Children in nearby fishing villages have learned that spotting this bird's {color_phrase} colors early in the morning often signals good fishing conditions for the day. The species has become intertwined with local culture and traditions, featuring in folk tales and community celebrations.",
+    
+    "High in the mystical Rwenzori Mountains, often called the 'Mountains of the Moon', the {name} sings its enchanting melodies through the morning mist. {desc} Its {color_phrase} feathers capture and reflect the unique light of this cloud forest environment, creating a spectacle that few are privileged to witness. Mountain guides consider sightings of this bird as special moments during their expeditions through this UNESCO World Heritage Site.",
+    
+    "At the breathtaking Murchison Falls, where the Nile River forces its way through a narrow gorge, the {name} glides effortlessly over the roaring waters. {desc} Tourists and photographers often gasp in awe at its {color_phrase} beauty set against one of Africa's most dramatic natural backdrops. The bird's presence adds to the magical atmosphere of this iconic Ugandan landmark that continues to inspire visitors.",
+    
+    "Among the extensive papyrus swamps of Uganda, the {name} wades with extraordinary grace and precision. {desc} Its long, slender legs and distinctive {color_phrase} crest have earned it the respectful title of 'king of the wetlands' among local birdwatchers and conservationists. The species demonstrates remarkable adaptation to its aquatic environment, showcasing evolution's incredible work.",
+    
+    "As sunset paints the skies over Kidepo Valley National Park, the {name} calls across the vast plains, its voice carrying through the evening air. {desc} Its {color_phrase} silhouette against the dramatic African sunset has become a symbol of Uganda's wild, untamed heart and the country's commitment to preserving its natural heritage for future generations to experience and appreciate.",
+    
+    "In the ancient, mist-shrouded rainforests of Bwindi Impenetrable National Park, the {name} flits skillfully between thick vines and dense foliage. {desc} Even experienced gorilla trackers, focused on their primary mission, often pause their important work to admire the bird's {color_phrase} brilliance shining through the forest gloom. This creates magical moments where humanity connects with nature's diverse wonders.",
+    
+    "By the peaceful shores of Lake Mburo National Park, the {name} reflects perfectly in the calm waters during the golden hour. {desc} Its {color_phrase} feathers seem to mirror the profound peace of the savanna night settling over the landscape. The bird's presence enhances the tranquil atmosphere of this protected area, reminding visitors of nature's gentle rhythms and timeless beauty that endure through the ages."
 ]
 
 class BirdStoryGenerator:
@@ -262,8 +273,8 @@ class BirdStoryGenerator:
     def __call__(self, name, description="", colors=None):
         if colors is None: 
             colors = []
-        color_phrase = ", ".join([c.strip() for c in colors]) if colors else "vibrant"
-        desc = description.strip().capitalize() if description else "A fascinating bird with unique habits."
+        color_phrase = ", ".join([c.strip() for c in colors]) if colors else "vibrant and beautifully patterned"
+        desc = description.strip().capitalize() if description else "This fascinating bird exhibits unique behaviors and plays an important role in its ecosystem, captivating birdwatchers and researchers alike with its distinctive characteristics and adaptations to its natural environment."
         tmpl = random.choice(self.templates)
         return tmpl.format(name=name, color_phrase=color_phrase, desc=desc)
 
@@ -422,7 +433,7 @@ def load_video_model():
 video_model_data = load_video_model()
 
 # ========== MOVIEPY VIDEO CREATION FUNCTIONS ==========
-def ken_burns_effect(image_path, duration=4.0, zoom_direction="random"):
+def ken_burns_effect(image_path, duration=5.0, zoom_direction="random"):
     """
     Enhanced Ken Burns effect with multiple zoom directions using MoviePy
     """
@@ -434,7 +445,7 @@ def ken_burns_effect(image_path, duration=4.0, zoom_direction="random"):
         w, h = clip.size
         
         # Different zoom effects
-        zoom_level = 1.15
+        zoom_level = 1.2  # Increased zoom for more dramatic effect
         
         if zoom_direction == "random":
             zoom_direction = random.choice(["in", "out", "pan_left", "pan_right", "pan_up", "pan_down"])
@@ -451,49 +462,49 @@ def ken_burns_effect(image_path, duration=4.0, zoom_direction="random"):
             
         elif zoom_direction == "pan_left":
             # Pan from right to left
-            clip = clip.resize(lambda t: 1 + (zoom_level - 1) * 0.3)
+            clip = clip.resize(lambda t: 1 + (zoom_level - 1) * 0.4)
             clip = clip.set_position(lambda t: (
-                w * 0.1 * (1 - t/duration),
+                w * 0.15 * (1 - t/duration),
                 "center"
             ))
             
         elif zoom_direction == "pan_right":
             # Pan from left to right
-            clip = clip.resize(lambda t: 1 + (zoom_level - 1) * 0.3)
+            clip = clip.resize(lambda t: 1 + (zoom_level - 1) * 0.4)
             clip = clip.set_position(lambda t: (
-                -w * 0.1 * (1 - t/duration),
+                -w * 0.15 * (1 - t/duration),
                 "center"
             ))
             
         elif zoom_direction == "pan_up":
             # Pan from bottom to top
-            clip = clip.resize(lambda t: 1 + (zoom_level - 1) * 0.3)
+            clip = clip.resize(lambda t: 1 + (zoom_level - 1) * 0.4)
             clip = clip.set_position(lambda t: (
                 "center",
-                h * 0.1 * (1 - t/duration)
+                h * 0.15 * (1 - t/duration)
             ))
             
         elif zoom_direction == "pan_down":
             # Pan from top to bottom
-            clip = clip.resize(lambda t: 1 + (zoom_level - 1) * 0.3)
+            clip = clip.resize(lambda t: 1 + (zoom_level - 1) * 0.4)
             clip = clip.set_position(lambda t: (
                 "center",
-                -h * 0.1 * (1 - t/duration)
+                -h * 0.15 * (1 - t/duration)
             ))
         
         # Add smooth fade in/out
-        clip = clip.fadein(0.5).fadeout(0.5)
+        clip = clip.fadein(0.7).fadeout(0.7)  # Longer fades for smoother transitions
         return clip
         
     except Exception as e:
         st.error(f"❌ Ken Burns effect error: {e}")
         # Fallback: simple image clip
-        return ImageClip(image_path).set_duration(duration).fadein(0.3).fadeout(0.3)
+        return ImageClip(image_path).set_duration(duration).fadein(0.5).fadeout(0.5)
 
 def get_audio_duration(audio_path):
     """Get audio duration using MoviePy"""
     if not MOVIEPY_AVAILABLE:
-        return 15  # Default fallback
+        return 25  # Increased default duration for longer stories
         
     try:
         audio_clip = AudioFileClip(audio_path)
@@ -502,11 +513,11 @@ def get_audio_duration(audio_path):
         return duration
     except Exception as e:
         st.warning(f"⚠️ Could not determine audio duration: {e}, using default")
-        return 15
+        return 25  # Increased default for longer stories
 
-def create_moviepy_video(images, audio_path, output_path, video_style="ken_burns"):
+def create_moviepy_video(images, audio_path, output_path):
     """
-    Create video using MoviePy with enhanced effects
+    Create video using MoviePy with Ken Burns effect only
     """
     if not MOVIEPY_AVAILABLE:
         st.error("❌ MoviePy is not available. Cannot create video.")
@@ -516,12 +527,13 @@ def create_moviepy_video(images, audio_path, output_path, video_style="ken_burns
         # Load and process audio with enhanced effects
         raw_audio = AudioFileClip(audio_path)
         
-        # Add audio enhancements
-        narration = audio_fadein(raw_audio, 1.0)  # Longer fade in
-        narration = audio_fadeout(narration, 1.5)  # Longer fade out
+        # Add audio enhancements with longer fades
+        narration = audio_fadein(raw_audio, 1.5)  # Longer fade in
+        narration = audio_fadeout(narration, 2.0)  # Longer fade out
         
-        # Calculate durations
-        img_duration = max(4.0, narration.duration / len(images))
+        # Calculate durations - longer duration per image for more photos
+        audio_duration = narration.duration
+        img_duration = max(5.0, audio_duration / len(images))  # Increased minimum duration
         total_duration = img_duration * len(images)
         
         # Adjust audio to match video duration
@@ -532,28 +544,15 @@ def create_moviepy_video(images, audio_path, output_path, video_style="ken_burns
         else:
             narration = narration.subclip(0, total_duration)
         
-        # Create video clips based on selected style
+        # Create video clips with Ken Burns effect only
         clips = []
         
         for i, img_path in enumerate(images):
             try:
-                if video_style == "ken_burns":
-                    # Random Ken Burns direction for variety
-                    directions = ["in", "out", "pan_left", "pan_right", "pan_up", "pan_down"]
-                    direction = directions[i % len(directions)]
-                    clip = ken_burns_effect(img_path, img_duration, direction)
-                elif video_style == "simple_fade":
-                    # Simple crossfade between images
-                    clip = ImageClip(img_path).set_duration(img_duration)
-                    clip = clip.fadein(0.5).fadeout(0.5)
-                elif video_style == "zoom_only":
-                    # Zoom only effect
-                    clip = ImageClip(img_path).set_duration(img_duration)
-                    clip = clip.resize(lambda t: 1 + (1.1 - 1) * (t / img_duration))
-                    clip = clip.fadein(0.3).fadeout(0.3)
-                else:
-                    # Default Ken Burns
-                    clip = ken_burns_effect(img_path, img_duration)
+                # Use Ken Burns effect with random direction for variety
+                directions = ["in", "out", "pan_left", "pan_right", "pan_up", "pan_down"]
+                direction = directions[i % len(directions)]
+                clip = ken_burns_effect(img_path, img_duration, direction)
                 
                 if clip is not None:
                     clips.append(clip)
@@ -563,6 +562,7 @@ def create_moviepy_video(images, audio_path, output_path, video_style="ken_burns
                 # Create a simple clip as fallback
                 try:
                     clip = ImageClip(img_path).set_duration(img_duration)
+                    clip = clip.fadein(0.5).fadeout(0.5)
                     clips.append(clip)
                 except:
                     continue
@@ -571,14 +571,14 @@ def create_moviepy_video(images, audio_path, output_path, video_style="ken_burns
             st.error("❌ No valid video clips created")
             return None
         
-        # Combine clips
+        # Combine clips with smooth transitions
         video = concatenate_videoclips(clips, method="compose")
         video = video.set_audio(narration)
         
-        # Enhance video quality
+        # Enhance video quality with higher resolution
         video = video.resize(height=720)
         
-        # Write final video with optimized settings
+        # Write final video with optimized settings for better quality
         video.write_videofile(
             output_path, 
             fps=24, 
@@ -588,8 +588,9 @@ def create_moviepy_video(images, audio_path, output_path, video_style="ken_burns
             verbose=False,
             logger=None,
             ffmpeg_params=[
-                '-crf', '23',           # Quality setting
+                '-crf', '20',           # Better quality setting
                 '-pix_fmt', 'yuv420p',  # Better compatibility
+                '-movflags', '+faststart'  # Better streaming
             ]
         )
         
@@ -608,7 +609,7 @@ class AdvancedVideoGenerator:
     def __init__(self):
         self.csv_path = './birdsuganda.csv'
         self.bird_data = None
-        self.video_duration = 20
+        self.video_duration = 25  # Increased default duration
         self.moviepy_available = MOVIEPY_AVAILABLE
         
         # Initialize story generator - ALWAYS have a fallback
@@ -688,7 +689,7 @@ class AdvancedVideoGenerator:
     def natural_tts(self, text, filename):
         """Convert text to speech using gTTS"""
         try:
-            tts = gTTS(text=text, lang='en')
+            tts = gTTS(text=text, lang='en', slow=False)
             tts.save(filename)
             return filename
         except Exception as e:
@@ -739,7 +740,7 @@ class AdvancedVideoGenerator:
                         img_data = base64.b64decode(b64)
                         img = Image.open(BytesIO(img_data))
                         temp_path = f"./temp_model_{species_name.replace(' ', '_')}_{i}.jpg"
-                        img.save(temp_path, "JPEG")
+                        img.save(temp_path, "JPEG", quality=95)  # Better quality
                         image_paths.append(temp_path)
                     except Exception as e:
                         st.warning(f"⚠️ Could not decode image {i} for {species_name}: {e}")
@@ -756,7 +757,7 @@ class AdvancedVideoGenerator:
                         elif hasattr(img_item, 'save'):
                             # It's a PIL Image
                             temp_path = f"./temp_model_{species_name.replace(' ', '_')}_{i}.jpg"
-                            img_item.save(temp_path, "JPEG")
+                            img_item.save(temp_path, "JPEG", quality=95)
                             image_paths.append(temp_path)
                     except Exception as e:
                         st.warning(f"⚠️ Could not process image {i} for {species_name}: {e}")
@@ -769,7 +770,7 @@ class AdvancedVideoGenerator:
                         if hasattr(img_item, 'save'):
                             # It's a PIL Image
                             temp_path = f"./temp_model_{species_name.replace(' ', '_')}_{i}.jpg"
-                            img_item.save(temp_path, "JPEG")
+                            img_item.save(temp_path, "JPEG", quality=95)
                             image_paths.append(temp_path)
                     except Exception as e:
                         st.warning(f"⚠️ Could not process list image {i} for {species_name}: {e}")
@@ -781,15 +782,15 @@ class AdvancedVideoGenerator:
             st.error(f"❌ Error processing species images: {e}")
             return None
 
-    def get_bird_images(self, species_name, max_images=5):
+    def get_bird_images(self, species_name, max_images=8):  # Increased from 5 to 8
         """Get bird images for the species - prioritize model data, then fallbacks"""
         try:
             # First try to get images from the video model data
             model_images = self.extract_images_from_model_data(species_name)
             if model_images:
                 st.success(f"✅ Found {len(model_images)} images from model data")
-                # Limit to max_images and ensure we have variety
-                selected_images = self._select_best_images(model_images, max_images)
+                # Use more images if available
+                selected_images = self._select_best_images(model_images, min(max_images, len(model_images)))
                 return selected_images
             
             # Fallback to bird_db if available
@@ -800,7 +801,7 @@ class AdvancedVideoGenerator:
                         img_data = base64.b64decode(b64)
                         img = Image.open(BytesIO(img_data))
                         placeholder_path = f"./temp_bird_{species_name.replace(' ', '_')}_{i}.jpg"
-                        img.save(placeholder_path, "JPEG")
+                        img.save(placeholder_path, "JPEG", quality=95)
                         image_paths.append(placeholder_path)
                     except:
                         continue
@@ -873,7 +874,10 @@ class AdvancedVideoGenerator:
                 [60, 179, 113],   # Medium sea green
                 [186, 85, 211],   # Medium orchid
                 [255, 165, 0],    # Orange
-                [106, 90, 205]    # Slate blue
+                [106, 90, 205],   # Slate blue
+                [220, 20, 60],    # Crimson
+                [30, 144, 255],   # Dodger blue
+                [50, 205, 50]     # Lime green
             ]
             
             bg_color = colors[variation % len(colors)]
@@ -901,7 +905,7 @@ class AdvancedVideoGenerator:
             st.error(f"❌ Error creating placeholder: {e}")
             return False
 
-    def generate_story_video(self, species_name, video_style="ken_burns"):
+    def generate_story_video(self, species_name):
         """Generate a comprehensive story-based video with audio using MoviePy"""
         try:
             # Always generate a story - never fail here
@@ -925,14 +929,14 @@ class AdvancedVideoGenerator:
                         break
             
             # Generate story using the model
-            st.info("📖 Generating educational story...")
+            st.info("📖 Generating detailed educational story...")
             story_text = self.story_generator(common_name, description, colors)
             
             # Display the generated story
             st.markdown(f'<div class="story-box"><strong>📖 AI-Generated Story:</strong><br>{story_text}</div>', unsafe_allow_html=True)
             
             # Generate audio
-            st.info("🔊 Converting story to speech...")
+            st.info("🔊 Converting detailed story to speech...")
             audio_file = f"temp_story_{species_name.replace(' ', '_')}.mp3"
             audio_path = self.natural_tts(story_text, audio_file)
             
@@ -940,27 +944,27 @@ class AdvancedVideoGenerator:
                 st.error("❌ Failed to generate audio")
                 return None, None, None
             
-            # Get bird images - ALWAYS get images
-            st.info("🖼️ Gathering bird images...")
-            bird_images = self.get_bird_images(species_name, max_images=5)  # Increased for better variety
+            # Get bird images - ALWAYS get images (increased from 5 to 8)
+            st.info("🖼️ Gathering multiple bird images...")
+            bird_images = self.get_bird_images(species_name, max_images=8)  # Increased for better variety
             
             if not bird_images:
                 st.error("❌ No bird images available")
                 return None, None, None
             
             # Display the selected images
-            st.info(f"🎨 Selected {len(bird_images)} images for video")
+            st.info(f"🎨 Selected {len(bird_images)} images for video creation")
             self._display_image_grid(bird_images, species_name)
             
-            # Generate video using MoviePy
-            st.info("🎬 Creating story video with MoviePy...")
+            # Generate video using MoviePy with Ken Burns effect only
+            st.info("🎬 Creating enhanced story video with Ken Burns effects...")
             video_file = f"temp_story_video_{species_name.replace(' ', '_')}.mp4"
             
             if not MOVIEPY_AVAILABLE:
                 st.error("❌ MoviePy is not available. Cannot create video.")
                 return None, None, None
                 
-            video_path = create_moviepy_video(bird_images, audio_path, video_file, video_style)
+            video_path = create_moviepy_video(bird_images, audio_path, video_file)
             
             # Clean up temporary audio file
             try:
@@ -970,7 +974,7 @@ class AdvancedVideoGenerator:
                 pass
             
             if video_path and os.path.exists(video_path):
-                st.success(f"✅ Story video generated successfully!")
+                st.success(f"✅ Enhanced story video generated successfully!")
                 return video_path, story_text, bird_images
             else:
                 st.error("❌ Failed to generate video file")
@@ -983,7 +987,7 @@ class AdvancedVideoGenerator:
     def _display_image_grid(self, image_paths, species_name):
         """Display a grid of images being used in the video"""
         try:
-            st.markdown(f"### 🖼️ Images of {species_name}")
+            st.markdown(f"### 🖼️ Images of {species_name} (Used in Video)")
             
             # Create columns for image display
             cols = st.columns(min(4, len(image_paths)))
@@ -999,9 +1003,9 @@ class AdvancedVideoGenerator:
         except Exception as e:
             st.warning(f"⚠️ Could not display image grid: {e}")
 
-    def generate_video(self, species_name, video_style="ken_burns"):
+    def generate_video(self, species_name):
         """Main video generation function with story and audio"""
-        return self.generate_story_video(species_name, video_style)
+        return self.generate_story_video(species_name)
 
 # ========== RESNET MODEL ==========
 class ResNet34BirdModel:
@@ -1369,6 +1373,8 @@ def main():
             st.info("🔧 Please install MoviePy for video creation")
         else:
             st.success("🎥 Video Engine: MoviePy (Ken Burns effect)")
+            st.info("📹 Using 8 images per video")
+            st.info("🗣️ Detailed stories with narration")
         
         # Cleanup button
         if st.button("🧹 Clean Temporary Files", use_container_width=True):
@@ -1396,7 +1402,7 @@ def main():
         <strong>🦜 Welcome to Uganda Bird Spotter!</strong><br>
         This app uses AI models for bird identification and story generation. 
         Upload bird photos for identification, then generate AI-powered educational story videos 
-        with narrated audio and beautiful visual effects.
+        with narrated audio and beautiful visual effects using Ken Burns animation.
     </div>
     """, unsafe_allow_html=True)
     
@@ -1572,20 +1578,20 @@ def main():
     else:
         st.markdown(f"""
         <div class="video-section">
-            <strong>📖 AI Story Generation with Video</strong><br>
-            Generate complete educational story videos. Each video includes:
+            <strong>📖 Enhanced AI Story Generation with Video</strong><br>
+            Generate comprehensive educational story videos featuring:
             <br><br>
-            • <strong>AI-Generated Story</strong>: Unique educational narrative about the bird<br>
-            • <strong>Text-to-Speech Audio</strong>: Professional narration of the story<br>
-            • <strong>Visual Effects</strong>: Beautiful image transitions and effects<br>
-            • <strong>Multiple Images</strong>: Showcases the bird from different angles<br>
+            • <strong>Detailed AI-Generated Stories</strong>: Rich, educational narratives with ecological context<br>
+            • <strong>Professional Text-to-Speech Audio</strong>: Clear narration of detailed stories<br>
+            • <strong>Ken Burns Visual Effects</strong>: Beautiful pan and zoom animations on 8+ images<br>
+            • <strong>Multiple Bird Images</strong>: Showcases each species from various angles and settings<br>
             <br>
-            <strong>Video Engine:</strong> MoviePy with Ken Burns effect
+            <strong>Video Features:</strong> Ken Burns effects only | 8+ images per video | Detailed narration | HD Quality
         </div>
         """, unsafe_allow_html=True)
         
-        # Video generation options with style selection
-        col1, col2, col3 = st.columns([2, 1, 1])
+        # Video generation options - Only Ken Burns effect
+        col1, col2 = st.columns([3, 1])
         
         with col1:
             # Option 1: Use detected species
@@ -1593,36 +1599,23 @@ def main():
                 st.info(f"🦜 Detected Species: **{st.session_state.selected_species_for_video}**")
 
         with col2:
-            # Video style selection
-            video_style = st.selectbox(
-                "Video Style:",
-                options=["ken_burns", "simple_fade", "zoom_only"],
-                format_func=lambda x: {
-                    "ken_burns": "🎬 Ken Burns Effect",
-                    "simple_fade": "🔄 Crossfade",
-                    "zoom_only": "🔍 Zoom Only"
-                }[x]
-            )
-
-        with col3:
             if st.session_state.get('selected_species_for_video'):
                 if st.button("🎬 Generate Story Video", use_container_width=True, type="primary"):
-                    with st.spinner("Creating enhanced AI story video..."):
+                    with st.spinner("Creating enhanced story video with Ken Burns effects..."):
                         video_path, story_text, used_images = video_generator.generate_video(
-                            st.session_state.selected_species_for_video, 
-                            video_style=video_style
+                            st.session_state.selected_species_for_video
                         )
                         if video_path:
                             st.session_state.generated_video_path = video_path
                             st.session_state.generated_story = story_text
                             st.session_state.used_images = used_images
-                            st.success("✅ AI story video generated successfully!")
+                            st.success("✅ Enhanced story video generated successfully!")
                         else:
                             st.error("❌ Failed to generate story video")
         
         # Manual species selection
         st.markdown("---")
-        col1, col2 = st.columns([2, 1])
+        col1, col2 = st.columns([3, 1])
         
         with col1:
             manual_species = st.selectbox(
@@ -1635,25 +1628,25 @@ def main():
         
         with col2:
             if st.button("🎬 Generate Video for Selected Bird", use_container_width=True, type="primary"):
-                with st.spinner("Creating AI story video with audio..."):
-                    video_path, story_text, used_images = video_generator.generate_video(manual_species, video_style=video_style)
+                with st.spinner("Creating detailed AI story video with audio..."):
+                    video_path, story_text, used_images = video_generator.generate_video(manual_species)
                     if video_path:
                         st.session_state.generated_video_path = video_path
                         st.session_state.generated_story = story_text
                         st.session_state.used_images = used_images
                         st.session_state.selected_species_for_video = manual_species
-                        st.success("✅ AI story video generated successfully!")
+                        st.success("✅ Enhanced story video generated successfully!")
                     else:
                         st.error("❌ Failed to generate story video")
         
         # Display generated story and video
         if st.session_state.get('generated_video_path') and os.path.exists(st.session_state.generated_video_path):
             st.markdown("---")
-            st.markdown("### 📖 AI-Generated Story Video")
+            st.markdown("### 📖 Enhanced AI-Generated Story Video")
             
             # Display the story
             if st.session_state.get('generated_story'):
-                st.markdown(f'<div class="story-box"><strong>📖 AI-Generated Story:</strong><br>{st.session_state.generated_story}</div>', unsafe_allow_html=True)
+                st.markdown(f'<div class="story-box"><strong>📖 Detailed AI-Generated Story:</strong><br>{st.session_state.generated_story}</div>', unsafe_allow_html=True)
             
             # Display video
             try:
@@ -1663,7 +1656,7 @@ def main():
                 st.video(video_bytes)
                 
                 # Video information
-                st.info(f"**Video Details:** {st.session_state.selected_species_for_video} | MoviePy with {video_style} | {len(st.session_state.used_images)} images | Audio Narration")
+                st.info(f"**Video Details:** {st.session_state.selected_species_for_video} | Ken Burns Effects | {len(st.session_state.used_images)} images | Detailed Audio Narration | HD Quality")
                 
                 # Download buttons
                 col1, col2 = st.columns(2)
