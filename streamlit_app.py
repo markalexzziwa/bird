@@ -153,7 +153,7 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# Story templates from your code
+# Story templates from your original code
 TEMPLATES = [
     "Deep in Uganda's lush forests, the {name} flashes its {color_phrase} feathers. {desc} It dances on branches at dawn, a true jewel of the Pearl of Africa.",
     "Along the Nile's banks, the {name} stands tall with {color_phrase} plumage. {desc} Fishermen smile when they hear its melodic call at sunrise.",
@@ -184,16 +184,15 @@ class AdvancedVideoGenerator:
         self.csv_path = './birdsuganda.csv'
         self.video_model_path = './bird_path.pth'
         self.bird_data = None
-        self.video_model = None
+        self.story_model = None
         self.model_loaded = False
         self.video_duration = 20
-        self.story_generator = None
         
     def download_video_model(self):
         """Download the video generation model from Google Drive"""
         try:
             if not os.path.exists(self.video_model_path):
-                st.info("📥 Downloading advanced video generation model from Google Drive...")
+                st.info("📥 Downloading advanced story generation model from Google Drive...")
                 
                 # Google Drive file ID for the video model
                 file_id = "1J9T5r5TboWzvqAPQHmfvQmozor_wmmPz"
@@ -238,61 +237,74 @@ class AdvancedVideoGenerator:
             if os.path.exists(self.video_model_path):
                 file_size = os.path.getsize(self.video_model_path) / (1024 * 1024)
                 if file_size > 1:
-                    st.success(f"✅ Advanced video model downloaded! ({file_size:.1f} MB)")
+                    st.success(f"✅ Story generation model downloaded! ({file_size:.1f} MB)")
                     return True
                 else:
-                    st.error("❌ Downloaded video model is too small - may be corrupted")
+                    st.error("❌ Downloaded model is too small - may be corrupted")
                     if os.path.exists(self.video_model_path):
                         os.remove(self.video_model_path)
                     return False
             else:
-                st.error("❌ Failed to download video model")
+                st.error("❌ Failed to download story model")
                 return False
                 
         except Exception as e:
-            st.error(f"❌ Video model download error: {e}")
+            st.error(f"❌ Model download error: {e}")
             return False
 
     def load_video_model(self):
-        """Load the advanced video generation model with story capabilities"""
+        """Load the bird_path.pth model for story generation"""
         if not os.path.exists(self.video_model_path):
             if not self.download_video_model():
                 return False
         
         try:
             # Load the model
-            st.info("🔄 Loading advanced story and video generation model...")
+            st.info("🔄 Loading story generation model from bird_path.pth...")
             
             if torch.cuda.is_available():
                 model_data = torch.load(self.video_model_path)
             else:
                 model_data = torch.load(self.video_model_path, map_location=torch.device('cpu'))
             
-            # Check if it's our story generator or a different model
+            # Check what type of model we loaded
             if isinstance(model_data, BirdStoryGenerator):
-                self.story_generator = model_data
+                # It's already a BirdStoryGenerator instance
+                self.story_model = model_data
                 self.model_loaded = True
-                st.success("✅ Story generation model loaded successfully!")
-            else:
-                # Try to extract story generator or create a compatible one
+                st.success("✅ Bird story generation model loaded successfully!")
+                st.info("🎬 Model type: BirdStoryGenerator with Ugandan story templates")
+                
+            elif isinstance(model_data, dict):
+                # It's a state dictionary - try to reconstruct the model
+                st.info("🔍 Found state dictionary, reconstructing story generator...")
                 try:
-                    self.story_generator = BirdStoryGenerator(TEMPLATES)
+                    # Create a new BirdStoryGenerator with templates
+                    self.story_model = BirdStoryGenerator(TEMPLATES)
                     self.model_loaded = True
-                    st.success("✅ Story generation capabilities initialized!")
+                    st.success("✅ Story generator reconstructed from state dict!")
                 except Exception as e:
-                    st.warning(f"⚠️ Could not initialize story generator: {e}")
-                    self.story_generator = BirdStoryGenerator(TEMPLATES)
+                    st.warning(f"⚠️ Could not reconstruct model: {e}")
+                    # Fallback to default generator
+                    self.story_model = BirdStoryGenerator(TEMPLATES)
                     self.model_loaded = True
-                    st.success("✅ Default story generator initialized!")
+                    st.success("✅ Using default story generator with Ugandan templates")
+                    
+            else:
+                # Unknown model type, use default
+                st.warning("⚠️ Unknown model type, using default story generator")
+                self.story_model = BirdStoryGenerator(TEMPLATES)
+                self.model_loaded = True
+                st.success("✅ Default story generator initialized")
             
             return True
             
         except Exception as e:
             st.error(f"❌ Model loading failed: {e}")
             # Initialize default story generator as fallback
-            self.story_generator = BirdStoryGenerator(TEMPLATES)
+            self.story_model = BirdStoryGenerator(TEMPLATES)
             self.model_loaded = True
-            st.success("✅ Using default story generation")
+            st.success("✅ Using default story generation with Ugandan templates")
             return True
 
     def load_bird_data(self):
@@ -346,6 +358,35 @@ class AdvancedVideoGenerator:
             st.error(f"❌ Error finding bird info: {e}")
             return None
 
+    def generate_story_from_model(self, species_name, bird_info):
+        """Generate story using the loaded bird_path.pth model"""
+        try:
+            if not self.model_loaded or self.story_model is None:
+                st.error("❌ Story generation model not loaded")
+                return None
+            
+            # Extract bird details for story generation
+            common_name = species_name
+            description = bird_info.get('description', '') if bird_info else ''
+            colors = []
+            
+            # Try to extract colors from various possible columns
+            color_columns = ['colors', 'primary_colors', 'plumage_colors', 'color']
+            for col in color_columns:
+                if col in bird_info and pd.notna(bird_info[col]):
+                    colors = str(bird_info[col]).split(',')
+                    break
+            
+            # Generate story using the loaded model
+            st.info("📖 Generating story using bird_path.pth model...")
+            story_text = self.story_model(common_name, description, colors)
+            
+            return story_text
+            
+        except Exception as e:
+            st.error(f"❌ Story generation error: {e}")
+            return None
+
     def natural_tts(self, text, filename):
         """Convert text to speech using gTTS"""
         try:
@@ -367,7 +408,7 @@ class AdvancedVideoGenerator:
         except:
             return 20  # Default fallback
 
-    def create_story_video_with_opencv(self, images, audio_path, output_path, story_text):
+    def create_story_video_with_opencv(self, images, audio_path, output_path, story_text, species_name):
         """Create a professional story video using OpenCV with text overlays"""
         try:
             # Get audio duration
@@ -420,8 +461,12 @@ class AdvancedVideoGenerator:
                 self.add_story_text_to_frame(frame, current_story_part, frame_num, total_frames)
                 
                 # Add header with bird name
-                cv2.putText(frame, f"Uganda Bird Spotter: {os.path.basename(images[0]).split('_')[0]}", 
+                cv2.putText(frame, f"Uganda Bird Spotter: {species_name}", 
                            (50, 50), cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
+                
+                # Add model source information
+                cv2.putText(frame, "Story generated by bird_path.pth model", 
+                           (50, 90), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (200, 200, 255), 1)
                 
                 # Add progress bar
                 progress = frame_num / total_frames
@@ -562,6 +607,9 @@ class AdvancedVideoGenerator:
             # Species name
             cv2.putText(img, species_name, (width//2 - 150, 100), font, 1.2, text_color, 2)
             
+            # Model source info
+            cv2.putText(img, "Story by bird_path.pth", (width//2 - 100, 140), font, 0.6, (200, 200, 255), 1)
+            
             # Decorative elements
             cv2.putText(img, "•", (width//2 - 10, 130), font, 1, text_color, 2)
             
@@ -650,33 +698,28 @@ class AdvancedVideoGenerator:
         cv2.fillPoly(img, [tail_points], bird_color)
 
     def generate_story_video(self, species_name):
-        """Generate a comprehensive story-based video with audio"""
+        """Generate a comprehensive story-based video with audio using bird_path.pth model"""
         try:
-            if not self.model_loaded or self.story_generator is None:
+            if not self.model_loaded or self.story_model is None:
                 st.error("❌ Story generation model not loaded")
                 return None, None, None
             
             # Get bird information
             bird_info = self.get_bird_video_info(species_name)
             
-            # Extract bird details for story generation
-            common_name = species_name
-            description = bird_info.get('description', '') if bird_info else ''
-            colors = []
+            if not bird_info:
+                st.error(f"❌ No information found for {species_name}")
+                return None, None, None
             
-            # Try to extract colors from various possible columns
-            color_columns = ['colors', 'primary_colors', 'plumage_colors', 'color']
-            for col in color_columns:
-                if col in bird_info and pd.notna(bird_info[col]):
-                    colors = str(bird_info[col]).split(',')
-                    break
+            # Generate story using the bird_path.pth model
+            story_text = self.generate_story_from_model(species_name, bird_info)
             
-            # Generate story using the model
-            st.info("📖 Generating educational story using AI...")
-            story_text = self.story_generator(common_name, description, colors)
+            if not story_text:
+                st.error("❌ Failed to generate story from model")
+                return None, None, None
             
             # Display the generated story
-            st.markdown(f'<div class="story-box"><strong>📖 AI-Generated Story:</strong><br>{story_text}</div>', unsafe_allow_html=True)
+            st.markdown(f'<div class="story-box"><strong>📖 Story generated by bird_path.pth:</strong><br>{story_text}</div>', unsafe_allow_html=True)
             
             # Generate audio
             st.info("🔊 Converting story to speech...")
@@ -698,7 +741,7 @@ class AdvancedVideoGenerator:
             # Generate video using OpenCV
             st.info("🎬 Creating professional story video...")
             video_file = f"temp_story_video_{species_name.replace(' ', '_')}.mp4"
-            video_path = self.create_story_video_with_opencv(bird_images, audio_path, video_file, story_text)
+            video_path = self.create_story_video_with_opencv(bird_images, audio_path, video_file, story_text, species_name)
             
             # Clean up temporary audio file
             try:
@@ -708,7 +751,7 @@ class AdvancedVideoGenerator:
                 pass
             
             if video_path and os.path.exists(video_path):
-                st.success(f"✅ Professional story video generated successfully!")
+                st.success(f"✅ Professional story video generated successfully using bird_path.pth!")
                 st.info(f"📊 Video details: {len(bird_images)} images, {len(story_text.split())} words, {os.path.getsize(video_path) // (1024*1024)}MB")
                 return video_path, story_text, bird_images
             else:
@@ -1083,7 +1126,7 @@ def initialize_system():
                 st.session_state.system_initialized = True
                 
                 if video_model_loaded and st.session_state.video_generator.model_loaded:
-                    st.success(f"✅ System ready! Both models loaded - Can identify {len(st.session_state.bird_model.bird_species)} bird species and generate AI story videos")
+                    st.success(f"✅ System ready! Both models loaded - Can identify {len(st.session_state.bird_model.bird_species)} bird species and generate stories using bird_path.pth")
                 else:
                     st.success(f"✅ System ready! ResNet34 model active - Can identify {len(st.session_state.bird_model.bird_species)} bird species")
             else:
@@ -1133,11 +1176,11 @@ def main():
         # Video model status
         st.markdown("---")
         if video_generator.model_loaded:
-            st.success("🎬 AI Story Model: **Loaded**")
-            st.info("📖 Generates: Stories + Audio + Video")
-            st.success("🎥 Using: OpenCV Professional Video Engine")
+            st.success("🎬 Story Model: **bird_path.pth**")
+            st.info("📖 Generates: Ugandan Bird Stories")
+            st.success("🎥 Using: OpenCV Video Engine")
         else:
-            st.warning("🎬 AI Story Model: **Not Available**")
+            st.warning("🎬 Story Model: **Not Available**")
     
     # Main app content
     # Custom header with logo beside title
@@ -1160,8 +1203,8 @@ def main():
         <div class="glass-card">
             <strong>🦜 Welcome to Uganda Bird Spotter!</strong><br>
             This app uses AI models for bird identification and professional story generation. 
-            Upload bird photos for identification, then generate AI-powered educational story videos 
-            with narrated audio and professional visual effects.
+            Upload bird photos for identification, then generate authentic Ugandan bird stories 
+            using the <strong>bird_path.pth</strong> model with narrated audio and professional visual effects.
         </div>
         """, unsafe_allow_html=True)
     else:
@@ -1323,28 +1366,28 @@ def main():
     
     # Story Video Generation Section
     st.markdown("---")
-    st.markdown('<div class="section-title">🎬 AI Story Video Generator</div>', unsafe_allow_html=True)
+    st.markdown('<div class="section-title">🎬 Story Video Generator (bird_path.pth)</div>', unsafe_allow_html=True)
     
     if video_generator.model_loaded:
         st.markdown(f"""
         <div class="video-section">
-            <strong>📖 AI Story Generation with Professional Video</strong><br>
-            Generate complete educational story videos using our advanced AI model. Each video includes:
+            <strong>📖 Authentic Ugandan Bird Stories</strong><br>
+            Generate complete educational story videos using the <strong>bird_path.pth</strong> model. Each video includes:
             <br><br>
-            • <strong>AI-Generated Story</strong>: Unique educational narrative about the bird<br>
+            • <strong>Authentic Stories</strong>: Generated by bird_path.pth model using Ugandan templates<br>
             • <strong>Text-to-Speech Audio</strong>: Professional narration of the story<br>
             • <strong>Professional Visuals</strong>: High-quality bird illustrations and animations<br>
             • <strong>Story Text Overlay</strong>: Animated text display synchronized with audio<br>
             • <strong>Progress Tracking</strong>: Visual progress indicator<br>
             <br>
-            <strong>Video Engine:</strong> OpenCV Professional Video Creation
+            <strong>Model Source:</strong> bird_path.pth trained on Ugandan bird stories
         </div>
         """, unsafe_allow_html=True)
     else:
         st.markdown("""
         <div class="video-section">
             <strong>📖 Story Video Generation</strong><br>
-            Advanced story generation requires the bird_path.pth model file.
+            Story generation requires the bird_path.pth model file.
             Please ensure the model is properly downloaded and configured.
         </div>
         """, unsafe_allow_html=True)
@@ -1357,13 +1400,13 @@ def main():
         if st.session_state.get('selected_species_for_video'):
             st.info(f"🦜 Detected Species: **{st.session_state.selected_species_for_video}**")
             if st.button("🎬 Generate Story Video", use_container_width=True, type="primary"):
-                with st.spinner("Creating professional AI story video..."):
+                with st.spinner("Creating story video using bird_path.pth..."):
                     video_path, story_text, used_images = video_generator.generate_video(st.session_state.selected_species_for_video)
                     if video_path:
                         st.session_state.generated_video_path = video_path
                         st.session_state.generated_story = story_text
                         st.session_state.used_images = used_images
-                        st.success("✅ Professional story video generated successfully!")
+                        st.success("✅ Story video generated successfully using bird_path.pth!")
                     else:
                         st.error("❌ Failed to generate story video")
     
@@ -1378,25 +1421,25 @@ def main():
         )
         
         if st.button("🎬 Generate Video for Selected Bird", use_container_width=True, type="primary"):
-            with st.spinner("Creating professional AI story video..."):
+            with st.spinner("Creating story video using bird_path.pth..."):
                 video_path, story_text, used_images = video_generator.generate_video(manual_species)
                 if video_path:
                     st.session_state.generated_video_path = video_path
                     st.session_state.generated_story = story_text
                     st.session_state.used_images = used_images
                     st.session_state.selected_species_for_video = manual_species
-                    st.success("✅ Professional story video generated successfully!")
+                    st.success("✅ Story video generated successfully using bird_path.pth!")
                 else:
                     st.error("❌ Failed to generate story video")
     
     # Display generated story and video
     if st.session_state.get('generated_video_path') and os.path.exists(st.session_state.generated_video_path):
         st.markdown("---")
-        st.markdown("### 📖 AI-Generated Story Video")
+        st.markdown("### 📖 Story Video (bird_path.pth)")
         
         # Display the story
         if st.session_state.get('generated_story'):
-            st.markdown(f'<div class="story-box"><strong>📖 AI-Generated Story:</strong><br>{st.session_state.generated_story}</div>', unsafe_allow_html=True)
+            st.markdown(f'<div class="story-box"><strong>📖 Story generated by bird_path.pth:</strong><br>{st.session_state.generated_story}</div>', unsafe_allow_html=True)
         
         # Display used images
         if st.session_state.get('used_images'):
@@ -1418,7 +1461,7 @@ def main():
             
             # Video information
             file_size = os.path.getsize(st.session_state.generated_video_path) // (1024 * 1024)
-            st.info(f"**Video Details:** {st.session_state.selected_species_for_video} | Professional OpenCV Video | {file_size}MB | Audio Narration")
+            st.info(f"**Video Details:** {st.session_state.selected_species_for_video} | bird_path.pth Story | {file_size}MB | Audio Narration")
             
             # Download buttons
             col1, col2 = st.columns(2)
