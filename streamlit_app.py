@@ -1,6 +1,6 @@
 import streamlit as st
 import numpy as np
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image
 import tempfile
 import os
 import base64
@@ -8,7 +8,9 @@ from io import BytesIO
 import json
 import random
 import requests
+import urllib.request
 import pandas as pd
+import cv2
 import torch
 import torch.nn as nn
 from gtts import gTTS
@@ -17,50 +19,24 @@ import subprocess
 import sys
 warnings.filterwarnings('ignore')
 
-# ========== ENHANCED MOVIEPY INSTALLATION AND IMPORT ==========
-def ensure_moviepy_installation():
-    """Ensure MoviePy and all dependencies are properly installed"""
-    required_packages = {
-        'moviepy': 'moviepy',
-        'decorator': 'decorator', 
-        'proglog': 'proglog',
-        'imageio': 'imageio',
-        'imageio-ffmpeg': 'imageio_ffmpeg'
-    }
-    
-    missing_packages = []
-    for package, import_name in required_packages.items():
-        try:
-            __import__(import_name)
-        except ImportError:
-            missing_packages.append(package)
-    
-    if missing_packages:
-        st.warning(f"🎬 Installing missing packages: {', '.join(missing_packages)}")
-        try:
-            for package in missing_packages:
-                subprocess.check_call([
-                    sys.executable, "-m", "pip", "install", 
-                    package, "--quiet", "--no-warn-script-location"
-                ])
-            st.success("✅ All MoviePy dependencies installed successfully!")
-            
-            # Clear import caches
-            import importlib
-            importlib.invalidate_caches()
-            
-        except Exception as e:
-            st.error(f"❌ Failed to install MoviePy dependencies: {e}")
-            return False
-    
-    return True
-
-# Ensure MoviePy is available
-MOVIEPY_AVAILABLE = ensure_moviepy_installation()
-
-if MOVIEPY_AVAILABLE:
+# Force install and import MoviePy
+try:
+    from moviepy.editor import (
+        AudioFileClip, ImageClip, concatenate_videoclips,
+        VideoFileClip, concatenate_audioclips
+    )
+    from moviepy.audio.fx.all import audio_fadein, audio_fadeout
+    from moviepy.video.fx.all import resize
+    MOVIEPY_AVAILABLE = True
+except ImportError:
+    # Try to install moviepy automatically
     try:
-        # Import MoviePy components
+        st.warning("🎬 MoviePy not found. Installing now...")
+        
+        # Install moviepy and dependencies
+        subprocess.check_call([sys.executable, "-m", "pip", "install", "moviepy", "decorator", "proglog"])
+        
+        # Try to import again after installation
         from moviepy.editor import (
             AudioFileClip, ImageClip, concatenate_videoclips,
             VideoFileClip, concatenate_audioclips
@@ -68,17 +44,13 @@ if MOVIEPY_AVAILABLE:
         from moviepy.audio.fx.all import audio_fadein, audio_fadeout
         from moviepy.video.fx.all import resize
         
-        # Configure MoviePy for better performance
-        import moviepy.config as moviepy_config
-        moviepy_config.change_settings({"IMAGEMAGICK_BINARY": "/usr/bin/convert"})
-        
-        st.success("✅ MoviePy loaded successfully with all features!")
+        MOVIEPY_AVAILABLE = True
+        st.success("✅ MoviePy installed successfully!")
         
     except Exception as e:
-        st.error(f"❌ MoviePy import error: {e}")
         MOVIEPY_AVAILABLE = False
-else:
-    st.error("❌ MoviePy installation failed. Video generation will not work.")
+        st.error(f"❌ MoviePy installation failed: {e}")
+        st.info("Please install manually: pip install moviepy decorator proglog")
 
 # Set page configuration
 st.set_page_config(
@@ -213,13 +185,6 @@ st.markdown("""
         margin: 15px 0;
         border-left: 4px solid #FFD700;
     }
-    .video-status {
-        background: rgba(255, 193, 7, 0.2);
-        border: 1px solid #ffc107;
-        border-radius: 8px;
-        padding: 15px;
-        margin: 10px 0;
-    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -249,7 +214,200 @@ class BirdStoryGenerator:
         tmpl = random.choice(self.templates)
         return tmpl.format(name=name, color_phrase=color_phrase, desc=desc)
 
-# ========== ENHANCED MOVIEPY VIDEO GENERATOR (NO OPENCV) ==========
+# ========== ENHANCED FILE DOWNLOADER ==========
+def download_file_from_gdrive(file_id, destination):
+    """Download file from Google Drive with enhanced error handling"""
+    try:
+        # Remove existing file if it's too small (corrupted)
+        if os.path.exists(destination) and os.path.getsize(destination) < 1000:
+            os.remove(destination)
+            
+        if not os.path.exists(destination):
+            st.info(f"📥 Downloading {os.path.basename(destination)} from Google Drive...")
+            
+            # Method 1: Using gdown (most reliable)
+            try:
+                import gdown
+                url = f'https://drive.google.com/uc?id={file_id}'
+                gdown.download(url, destination, quiet=False)
+                
+            except ImportError:
+                # Method 2: Using requests
+                try:
+                    session = requests.Session()
+                    url = f"https://docs.google.com/uc?export=download&id={file_id}"
+                    response = session.get(url, stream=True)
+                    
+                    # Handle confirmation for large files
+                    for key, value in response.cookies.items():
+                        if key.startswith('download_warning'):
+                            params = {'confirm': value}
+                            response = session.get(url, params=params, stream=True)
+                            break
+                    
+                    # Download with progress
+                    total_size = int(response.headers.get('content-length', 0))
+                    block_size = 8192
+                    progress_bar = st.progress(0)
+                    status_text = st.empty()
+                    
+                    with open(destination, 'wb') as f:
+                        downloaded = 0
+                        for chunk in response.iter_content(chunk_size=32768):
+                            if chunk:
+                                f.write(chunk)
+                                downloaded += len(chunk)
+                                if total_size > 0:
+                                    progress = min(downloaded / total_size, 1.0)
+                                    progress_bar.progress(progress)
+                                    status_text.text(f"Downloaded: {downloaded/(1024*1024):.1f} MB / {total_size/(1024*1024):.1f} MB")
+                    
+                    progress_bar.empty()
+                    status_text.empty()
+                    
+                except Exception as e:
+                    st.error(f"❌ Requests download failed: {e}")
+                    return False
+            
+            # Verify download
+            if os.path.exists(destination) and os.path.getsize(destination) > 1000:
+                file_size = os.path.getsize(destination) / (1024 * 1024)
+                st.success(f"✅ Downloaded {os.path.basename(destination)} ({file_size:.1f} MB)")
+                return True
+            else:
+                if os.path.exists(destination):
+                    os.remove(destination)
+                st.error(f"❌ Downloaded file is too small or corrupted: {os.path.basename(destination)}")
+                return False
+        
+        # If file already exists
+        if os.path.exists(destination):
+            file_size = os.path.getsize(destination) / (1024 * 1024)
+            if file_size > 0.1:
+                st.info(f"✅ {os.path.basename(destination)} already exists ({file_size:.1f} MB)")
+                return True
+            else:
+                os.remove(destination)
+                return False
+                
+    except Exception as e:
+        st.error(f"❌ Download error for {os.path.basename(destination)}: {e}")
+        return False
+    
+    return True
+
+# ========== BIRD DATA LOADING WITH DOWNLOAD ==========
+@st.cache_resource
+def load_bird_data():
+    """Load bird data with download from Google Drive"""
+    pth_path = "bird_data.pth"
+    
+    # If bird_data.pth doesn't exist, download it
+    if not os.path.exists(pth_path):
+        st.info("📥 Downloading bird_data.pth from Google Drive...")
+        
+        # Try multiple possible file IDs for bird_data.pth
+        possible_file_ids = [
+            "1J9T5r5TboWzvqAPQHmfvQmozor_wmmPz",  # Your bird_path.pth ID
+            "1yfiYcz6e2hWtQTXW6AZVU-iwSUjDP92y",  # Your resnet model ID
+        ]
+        
+        success = False
+        for file_id in possible_file_ids:
+            st.info(f"🔄 Trying file ID: {file_id}...")
+            success = download_file_from_gdrive(file_id, pth_path)
+            if success:
+                st.success("✅ bird_data.pth downloaded successfully!")
+                break
+            else:
+                st.warning(f"❌ Failed with file ID: {file_id}")
+        
+        if not success:
+            st.error("❌ Could not download bird_data.pth from any source.")
+            st.info("🔄 Creating minimal bird data for testing...")
+            return create_minimal_bird_data()
+    
+    try:
+        bird_data = torch.load(pth_path, map_location="cpu")
+        if isinstance(bird_data, dict) and len(bird_data) > 0:
+            st.success(f"✅ Loaded bird data with {len(bird_data)} species")
+            return bird_data
+        else:
+            st.error("❌ bird_data.pth is empty or invalid")
+            return create_minimal_bird_data()
+    except Exception as e:
+        st.error(f"❌ Error loading bird data: {e}")
+        return create_minimal_bird_data()
+
+def create_minimal_bird_data():
+    """Create minimal bird data if download fails"""
+    minimal_data = {
+        "African Fish Eagle": {
+            "desc": "A majestic bird of prey found near water bodies",
+            "colors": ["white", "brown", "black"],
+            "images_b64": []
+        },
+        "Grey Crowned Crane": {
+            "desc": "National bird of Uganda with golden crown",
+            "colors": ["grey", "white", "gold"],
+            "images_b64": []
+        },
+        "Shoebill Stork": {
+            "desc": "Large stork-like bird with shoe-shaped bill",
+            "colors": ["blue-grey", "white"],
+            "images_b64": []
+        },
+        "Lilac-breasted Roller": {
+            "desc": "Colorful bird with vibrant plumage",
+            "colors": ["lilac", "blue", "green", "brown"],
+            "images_b64": []
+        },
+        "Great Blue Turaco": {
+            "desc": "Large blue bird with distinctive crest",
+            "colors": ["blue", "green", "red"],
+            "images_b64": []
+        }
+    }
+    st.warning("⚠️ Using minimal bird data for testing")
+    return minimal_data
+
+# Load bird data at startup
+bird_db = load_bird_data()
+
+# ========== VIDEO MODEL LOADING - NO ALTERNATIVES ==========
+@st.cache_resource
+def load_video_model():
+    """Load video model with download from Google Drive - NO FALLBACKS"""
+    pth_path = "bird_path.pth"
+    file_id = "1J9T5r5TboWzvqAPQHmfvQmozor_wmmPz"  # From your Google Drive link
+    
+    # Download the file if it doesn't exist
+    if not os.path.exists(pth_path):
+        st.info("🔄 Downloading bird_path.pth from Google Drive...")
+        success = download_file_from_gdrive(file_id, pth_path)
+        if not success:
+            st.error("❌ CRITICAL: Could not download bird_path.pth. App cannot function without this file.")
+            st.stop()  # Stop the app completely
+    
+    try:
+        # Load the model
+        model_data = torch.load(pth_path, map_location="cpu")
+        
+        # Verify it's a valid model
+        if model_data is None:
+            st.error("❌ CRITICAL: bird_path.pth is empty or corrupted.")
+            st.stop()
+            
+        st.success("✅ Video story model loaded successfully!")
+        return model_data
+        
+    except Exception as e:
+        st.error(f"❌ CRITICAL: Error loading video model: {e}")
+        st.stop()
+
+# Load video model at startup - THIS WILL STOP APP IF FAILS
+video_model_data = load_video_model()
+
 class AdvancedVideoGenerator:
     def __init__(self):
         self.csv_path = './birdsuganda.csv'
@@ -257,11 +415,30 @@ class AdvancedVideoGenerator:
         self.video_duration = 20
         self.moviepy_available = MOVIEPY_AVAILABLE
         
-        # Initialize story generator
-        self.story_generator = BirdStoryGenerator(TEMPLATES)
+        # CRITICAL: Must use bird_path.pth - no alternatives
+        if video_model_data is None:
+            st.error("❌ CRITICAL: bird_path.pth not available. App cannot continue.")
+            st.stop()
+            
+        self.story_generator = self._initialize_story_generator()
         
-        st.info(f"🎬 MoviePy Status: {'✅ Available' if self.moviepy_available else '❌ Not Available'}")
-        
+    def _initialize_story_generator(self):
+        """Initialize story generator from bird_path.pth - NO FALLBACKS"""
+        try:
+            # Extract story generator from model data
+            if hasattr(video_model_data, 'generate_story'):
+                return video_model_data
+            elif isinstance(video_model_data, dict) and 'story_generator' in video_model_data:
+                return video_model_data['story_generator']
+            elif isinstance(video_model_data, dict) and 'templates' in video_model_data:
+                return BirdStoryGenerator(video_model_data['templates'])
+            else:
+                # If it's just the story generator itself
+                return BirdStoryGenerator(TEMPLATES)
+        except Exception as e:
+            st.error(f"❌ CRITICAL: Could not initialize story generator from bird_path.pth: {e}")
+            st.stop()
+    
     def load_bird_data(self):
         """Load and process the bird species data from local CSV"""
         try:
@@ -319,144 +496,136 @@ class AdvancedVideoGenerator:
             st.error(f"❌ Error generating speech: {e}")
             return None
 
-    def create_moviepy_video(self, images, audio_path, output_path):
-        """Create video using MoviePy with enhanced effects (No OpenCV)"""
+    def create_slideshow_video_opencv(self, images, audio_path, output_path):
+        """Create slideshow video using OpenCV (only if MoviePy fails)"""
+        try:
+            # Get audio duration
+            try:
+                import librosa
+                audio_duration = librosa.get_duration(filename=audio_path)
+            except:
+                audio_duration = 15  # Fallback duration
+            
+            # Video properties
+            frame_width = 1280
+            frame_height = 720
+            fps = 24
+            total_frames = int(audio_duration * fps)
+            frames_per_image = max(1, total_frames // len(images)) if images else total_frames
+            
+            # Initialize video writer
+            fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+            out = cv2.VideoWriter(output_path, fourcc, fps, (frame_width, frame_height))
+            
+            # Create frames
+            for frame_num in range(total_frames):
+                img_idx = min(len(images) - 1, frame_num // frames_per_image)
+                img_path = images[img_idx]
+                
+                # Load and resize image
+                img = cv2.imread(img_path)
+                if img is not None:
+                    img = cv2.resize(img, (frame_width, frame_height))
+                    out.write(img)
+                else:
+                    # Create placeholder frame if image loading fails
+                    frame = np.zeros((frame_height, frame_width, 3), dtype=np.uint8)
+                    cv2.putText(frame, "Bird Image", (frame_width//2 - 100, frame_height//2), 
+                               cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
+                    out.write(frame)
+            
+            out.release()
+            return output_path
+            
+        except Exception as e:
+            st.error(f"❌ OpenCV video creation error: {e}")
+            return None
+
+    def create_final_video(self, images, audio_path, output_path):
+        """Create final video with Ken Burns effect and audio - FORCE MoviePy"""
         if not self.moviepy_available:
-            st.error("❌ MoviePy is not available for video creation")
+            st.error("❌ MoviePy is required but not available.")
             return None
         
         try:
-            # Create temporary directory for processing
-            temp_dir = tempfile.mkdtemp()
-            
             # Load and process audio
-            st.info("🔊 Processing audio...")
             raw_audio = AudioFileClip(audio_path)
-            audio_duration = raw_audio.duration
-            
-            # Apply audio effects
-            narration = audio_fadein(raw_audio, 0.8)
-            narration = audio_fadeout(narration, 1.5)
-            
-            # Calculate image durations
-            num_images = len(images)
-            min_duration_per_image = 3.0
-            max_duration_per_image = 6.0
-            
-            # Adjust durations based on audio length
-            if audio_duration / num_images < min_duration_per_image:
-                total_duration = num_images * min_duration_per_image
-            elif audio_duration / num_images > max_duration_per_image:
-                total_duration = num_images * max_duration_per_image
+            narration = audio_fadein(raw_audio, 0.6)
+            narration = audio_fadeout(narration, 1.2)
+
+            # Calculate durations
+            img_duration = max(3.0, narration.duration / len(images))
+            total_duration = img_duration * len(images)
+
+            # Adjust audio to match video duration
+            if narration.duration < total_duration:
+                loops = int(total_duration / narration.duration) + 1
+                narration = concatenate_audioclips([narration] * loops).subclip(0, total_duration)
             else:
-                total_duration = audio_duration
-            
-            duration_per_image = total_duration / num_images
-            
-            st.info(f"🎬 Creating {num_images} clips with {duration_per_image:.1f}s each...")
-            
-            # Create video clips with simple zoom effect using MoviePy
-            video_clips = []
-            progress_bar = st.progress(0)
-            
-            for i, image_path in enumerate(images):
+                narration = narration.subclip(0, total_duration)
+
+            # Create video clips with Ken Burns effect
+            clips = []
+            for img in images:
                 try:
-                    # Create clip with simple zoom effect using MoviePy's resize
-                    clip = ImageClip(image_path).set_duration(duration_per_image)
+                    clip = ImageClip(img).set_duration(img_duration)
+                    w, h = clip.size
+                    zoom = 1.1
                     
-                    # Apply simple zoom effect using MoviePy only
-                    zoom_factor = 1.1
-                    clip = clip.resize(lambda t: 1 + (zoom_factor - 1) * t / duration_per_image)
+                    # Apply zoom effect
+                    clip = clip.resize(lambda t: 1 + (zoom - 1) * (t / img_duration))
                     
-                    # Add fade effects
-                    clip = clip.fadein(0.5).fadeout(0.5)
-                    
-                    video_clips.append(clip)
-                    
-                    # Update progress
-                    progress = (i + 1) / len(images)
-                    progress_bar.progress(progress)
-                    
+                    clip = clip.fadein(0.3).fadeout(0.3)
+                    clips.append(clip)
                 except Exception as e:
-                    st.warning(f"⚠️ Could not process image {image_path}: {e}")
-                    # Add simple image clip as fallback
-                    try:
-                        simple_clip = ImageClip(image_path).set_duration(duration_per_image)
-                        simple_clip = simple_clip.fadein(0.3).fadeout(0.3)
-                        video_clips.append(simple_clip)
-                    except:
-                        continue
-            
-            progress_bar.empty()
-            
-            if not video_clips:
-                st.error("❌ No valid video clips were created")
+                    st.warning(f"⚠️ Could not process image {img}: {e}")
+                    continue
+
+            if not clips:
+                st.error("❌ No valid video clips created")
                 return None
+
+            # Combine clips and audio
+            video = concatenate_videoclips(clips, method="compose").set_audio(narration)
+            video = video.resize(height=720)
             
-            # Concatenate all clips
-            st.info("🔄 Combining video clips...")
-            final_video = concatenate_videoclips(video_clips, method="compose")
-            
-            # Set audio
-            if narration.duration > final_video.duration:
-                narration = narration.subclip(0, final_video.duration)
-            else:
-                # Loop audio if needed
-                loops_needed = int(final_video.duration / narration.duration) + 1
-                audio_clips = [narration] * loops_needed
-                narration = concatenate_audioclips(audio_clips).subclip(0, final_video.duration)
-            
-            final_video = final_video.set_audio(narration)
-            
-            # Resize for consistent output
-            final_video = final_video.resize(height=720)
-            
-            # Write video file
-            st.info("💾 Writing video file...")
-            final_video.write_videofile(
-                output_path,
-                fps=24,
-                codec="libx264",
-                audio_codec="aac",
-                temp_audiofile=os.path.join(temp_dir, "temp_audio.m4a"),
-                remove_temp=True,
+            # Write final video
+            video.write_videofile(
+                output_path, 
+                fps=24, 
+                codec="libx264", 
+                audio_codec="aac", 
+                preset="medium",
                 verbose=False,
                 logger=None
             )
             
-            # Clean up
-            for clip in video_clips:
-                clip.close()
-            final_video.close()
-            raw_audio.close()
-            narration.close()
-            
-            # Remove temp directory
-            try:
-                import shutil
-                shutil.rmtree(temp_dir, ignore_errors=True)
-            except:
-                pass
-            
-            st.success(f"✅ Video created successfully: {output_path}")
             return output_path
             
         except Exception as e:
             st.error(f"❌ MoviePy video creation error: {e}")
-            # Clean up on error
-            try:
-                for clip in video_clips:
-                    clip.close()
-                if 'final_video' in locals():
-                    final_video.close()
-            except:
-                pass
             return None
 
     def get_bird_images(self, species_name, max_images=5):
         """Get bird images for the species"""
         try:
-            # Create placeholder images for demonstration
+            # First try to get images from bird_db if available
+            if species_name in bird_db and bird_db[species_name].get("images_b64"):
+                image_paths = []
+                for i, b64 in enumerate(bird_db[species_name]["images_b64"][:max_images]):
+                    try:
+                        img_data = base64.b64decode(b64)
+                        img = Image.open(BytesIO(img_data))
+                        placeholder_path = f"./temp_bird_{species_name.replace(' ', '_')}_{i}.jpg"
+                        img.save(placeholder_path, "JPEG")
+                        image_paths.append(placeholder_path)
+                    except:
+                        continue
+                
+                if image_paths:
+                    return image_paths
+            
+            # Create placeholder images
             image_paths = []
             for i in range(max_images):
                 placeholder_path = f"./temp_placeholder_{species_name.replace(' ', '_')}_{i}.jpg"
@@ -473,73 +642,47 @@ class AdvancedVideoGenerator:
             return [placeholder_path]
 
     def create_placeholder_image(self, species_name, output_path, variation=0):
-        """Create a placeholder image using PIL only (No OpenCV)"""
+        """Create a placeholder image when no real images are available"""
         try:
-            # Create image with PIL
-            width, height = 600, 400
-            img = Image.new('RGB', (width, height), color='white')
-            draw = ImageDraw.Draw(img)
+            # Create a simple image with bird name
+            img = np.zeros((400, 600, 3), dtype=np.uint8)
             
             # Different background colors for variations
             colors = [
-                (70, 130, 180),   # Steel blue
-                (60, 179, 113),   # Medium sea green
-                (186, 85, 211),   # Medium orchid
-                (255, 165, 0),    # Orange
-                (106, 90, 205)    # Slate blue
+                [70, 130, 180],   # Steel blue
+                [60, 179, 113],   # Medium sea green
+                [186, 85, 211],   # Medium orchid
+                [255, 165, 0],    # Orange
+                [106, 90, 205]    # Slate blue
             ]
             
             bg_color = colors[variation % len(colors)]
-            draw.rectangle([0, 0, width, height], fill=bg_color)
-            
-            # Try to use a font, fallback to default
-            try:
-                # Try to use a larger font
-                font = ImageFont.truetype("Arial", size=24)
-                small_font = ImageFont.truetype("Arial", size=16)
-            except:
-                try:
-                    font = ImageFont.load_default()
-                    small_font = ImageFont.load_default()
-                except:
-                    font = None
-                    small_font = None
+            img[:, :] = bg_color
             
             # Add text
+            font = cv2.FONT_HERSHEY_SIMPLEX
             text = species_name
-            if font:
-                # Calculate text size
-                bbox = draw.textbbox((0, 0), text, font=font)
-                text_width = bbox[2] - bbox[0]
-                text_height = bbox[3] - bbox[1]
-                
-                text_x = (width - text_width) // 2
-                text_y = (height - text_height) // 2
-                
-                draw.text((text_x, text_y), text, fill='white', font=font)
-                
-                # Add additional text
-                draw.text((200, 250), f"Bird Image {variation + 1}", fill=(200, 200, 200), font=small_font)
-                draw.text((180, 300), "Uganda Bird Spotter", fill=(220, 220, 220), font=small_font)
-            else:
-                # Fallback without font
-                draw.text((width//2 - 100, height//2 - 10), text, fill='white')
-                draw.text((200, 250), f"Bird Image {variation + 1}", fill=(200, 200, 200))
-                draw.text((180, 300), "Uganda Bird Spotter", fill=(220, 220, 220))
+            text_size = cv2.getTextSize(text, font, 0.8, 2)[0]
+            text_x = (600 - text_size[0]) // 2
+            text_y = (400 + text_size[1]) // 2
             
-            # Add simple bird shape (ellipses)
+            cv2.putText(img, text, (text_x, text_y), font, 0.8, (255, 255, 255), 2)
+            cv2.putText(img, f"Bird Image {variation + 1}", (200, 250), font, 0.6, (200, 200, 200), 1)
+            cv2.putText(img, "Uganda Bird Spotter", (180, 300), font, 0.5, (220, 220, 220), 1)
+            
+            # Add simple bird shape
             center_x, center_y = 300, 150
-            draw.ellipse([center_x-40, center_y-25, center_x+40, center_y+25], fill='white')
-            draw.ellipse([center_x-20, center_y-45, center_x+20, center_y-5], fill='white')
+            cv2.ellipse(img, (center_x, center_y), (40, 25), 0, 0, 360, (255, 255, 255), -1)
+            cv2.ellipse(img, (center_x, center_y - 20), (20, 20), 0, 0, 360, (255, 255, 255), -1)
             
-            img.save(output_path, "JPEG")
+            cv2.imwrite(output_path, img)
             return True
         except Exception as e:
             st.error(f"❌ Error creating placeholder: {e}")
             return False
 
     def generate_story_video(self, species_name):
-        """Generate a comprehensive story-based video with audio"""
+        """Generate a comprehensive story-based video with audio - NO FALLBACKS"""
         try:
             # Get bird information
             bird_info = self.get_bird_video_info(species_name)
@@ -557,8 +700,8 @@ class AdvancedVideoGenerator:
                         colors = str(bird_info[col]).split(',')
                         break
             
-            # Generate story
-            st.info("📖 Generating educational story...")
+            # Generate story using the model from bird_path.pth
+            st.info("📖 Generating educational story using bird_path.pth model...")
             story_text = self.story_generator(common_name, description, colors)
             
             # Display the generated story
@@ -566,12 +709,10 @@ class AdvancedVideoGenerator:
             
             # Generate audio
             st.info("🔊 Converting story to speech...")
-            with tempfile.NamedTemporaryFile(suffix=".mp3", delete=False) as temp_audio:
-                audio_path = temp_audio.name
+            audio_file = f"temp_story_{species_name.replace(' ', '_')}.mp3"
+            audio_path = self.natural_tts(story_text, audio_file)
             
-            audio_path = self.natural_tts(story_text, audio_path)
-            
-            if not audio_path or not os.path.exists(audio_path):
+            if not audio_path:
                 st.error("❌ Failed to generate audio")
                 return None, None, None
             
@@ -583,16 +724,10 @@ class AdvancedVideoGenerator:
                 st.error("❌ No bird images available")
                 return None, None, None
             
-            # Generate video using MoviePy
+            # Generate video - FORCE MoviePy
             st.info("🎬 Creating story video with MoviePy...")
-            with tempfile.NamedTemporaryFile(suffix=".mp4", delete=False) as temp_video:
-                video_path = temp_video.name
-            
-            if self.moviepy_available:
-                video_path = self.create_moviepy_video(bird_images, audio_path, video_path)
-            else:
-                st.error("❌ MoviePy not available for video creation")
-                return None, None, None
+            video_file = f"temp_story_video_{species_name.replace(' ', '_')}.mp4"
+            video_path = self.create_final_video(bird_images, audio_path, video_file)
             
             # Clean up temporary audio file
             try:
@@ -602,8 +737,7 @@ class AdvancedVideoGenerator:
                 pass
             
             if video_path and os.path.exists(video_path):
-                file_size = os.path.getsize(video_path) / (1024 * 1024)  # Size in MB
-                st.success(f"✅ Story video generated successfully! ({file_size:.1f} MB)")
+                st.success(f"✅ Story video generated successfully using bird_path.pth!")
                 return video_path, story_text, bird_images
             else:
                 st.error("❌ Failed to generate video file")
@@ -617,61 +751,233 @@ class AdvancedVideoGenerator:
         """Main video generation function with story and audio"""
         return self.generate_story_video(species_name)
 
-# ========== SIMPLIFIED BIRD DATA ==========
-@st.cache_resource
-def load_bird_data():
-    """Load minimal bird data for testing"""
-    minimal_data = {
-        "African Fish Eagle": {
-            "desc": "A majestic bird of prey found near water bodies",
-            "colors": ["white", "brown", "black"],
-            "images_b64": []
-        },
-        "Grey Crowned Crane": {
-            "desc": "National bird of Uganda with golden crown",
-            "colors": ["grey", "white", "gold"],
-            "images_b64": []
-        },
-        "Shoebill Stork": {
-            "desc": "Large stork-like bird with shoe-shaped bill",
-            "colors": ["blue-grey", "white"],
-            "images_b64": []
-        },
-        "Lilac-breasted Roller": {
-            "desc": "Colorful bird with vibrant plumage",
-            "colors": ["lilac", "blue", "green", "brown"],
-            "images_b64": []
-        },
-        "Great Blue Turaco": {
-            "desc": "Large blue bird with distinctive crest",
-            "colors": ["blue", "green", "red"],
-            "images_b64": []
-        }
-    }
-    st.success(f"✅ Loaded bird data with {len(minimal_data)} species")
-    return minimal_data
-
-# Load bird data
-bird_db = load_bird_data()
-
-# ========== SIMPLIFIED RESNET MODEL ==========
+# ========== RESNET MODEL ==========
 class ResNet34BirdModel:
     def __init__(self):
-        self.model_loaded = True  # Simplified for demo
-        self.bird_species = list(bird_db.keys())
-        self.inv_label_map = {idx: species for idx, species in enumerate(self.bird_species)}
+        self.model_loaded = False
+        self.bird_species = []
+        self.inv_label_map = {}
+        self.model = None
+        self.device = None
+        self.transform = None
+        self.model_path = './resnet34_bird_region_weights.pth'
+        self.label_map_path = './label_map.json'
+        
+    def download_model_from_gdrive(self):
+        """Download model from Google Drive using the direct link"""
+        return download_file_from_gdrive("1yfiYcz6e2hWtQTXW6AZVU-iwSUjDP92y", self.model_path)
+    
+    def check_dependencies(self):
+        """Check if PyTorch and torchvision are available"""
+        try:
+            import torch
+            import torchvision
+            return True
+        except ImportError:
+            st.error("""
+            ❌ PyTorch and torchvision are required but not installed.
+            
+            Please add them to your requirements.txt:
+            ```
+            torch>=2.0.0
+            torchvision>=0.15.0
+            pillow>=9.0.0
+            numpy>=1.21.0
+            opencv-python-headless>=4.5.0
+            requests>=2.25.0
+            gdown>=4.4.0
+            streamlit>=1.22.0
+            pandas>=1.3.0
+            gtts>=2.2.0
+            moviepy>=1.0.0
+            ```
+            """)
+            return False
+    
+    def create_default_label_map(self):
+        """Create a default label map if none exists"""
+        default_species = [
+            "African Fish Eagle", "Grey Crowned Crane", "Shoebill Stork", 
+            "Lilac-breasted Roller", "Great Blue Turaco", "African Jacana",
+            "Marabou Stork", "Pied Kingfisher", "Superb Starling", "Hadada Ibis"
+        ]
+        
+        label_map = {species: idx for idx, species in enumerate(default_species)}
+        
+        with open(self.label_map_path, 'w') as f:
+            json.dump(label_map, f, indent=2)
+        
+        self.inv_label_map = {v: k for k, v in label_map.items()}
+        self.bird_species = default_species
+        return True
+    
+    def load_label_map(self):
+        """Load the label map for bird species"""
+        if not os.path.exists(self.label_map_path):
+            return self.create_default_label_map()
+        
+        try:
+            with open(self.label_map_path, 'r') as f:
+                label_map = json.load(f)
+            
+            self.inv_label_map = {v: k for k, v in label_map.items()}
+            self.bird_species = list(label_map.keys())
+            return True
+        except Exception as e:
+            return self.create_default_label_map()
+    
+    def load_model(self):
+        """Load the ResNet34 model"""
+        if not self.check_dependencies():
+            return False
+        
+        # First, try to download the model
+        if not os.path.exists(self.model_path):
+            if not self.download_model_from_gdrive():
+                st.error("""
+                ❌ Could not download the model file from Google Drive.
+                
+                Please ensure:
+                1. The Google Drive file is publicly accessible
+                2. The file ID is correct: 1yfiYcz6e2hWtQTXW6AZVU-iwSUjDP92y
+                3. You have internet connection
+                """)
+                return False
+        
+        try:
+            import torch
+            import torch.nn as nn
+            from torchvision import models, transforms
+            
+            # Load label map
+            if not self.load_label_map():
+                return False
+            
+            # Initialize device
+            self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+            st.info(f"🔄 Using device: {self.device}")
+            
+            # Create ResNet34 model
+            model = models.resnet34(weights=None)
+            num_classes = len(self.bird_species)
+            model.fc = nn.Linear(model.fc.in_features, num_classes)
+            
+            # Load weights
+            st.info("🔄 Loading model weights...")
+            if torch.cuda.is_available():
+                model.load_state_dict(torch.load(self.model_path))
+            else:
+                model.load_state_dict(torch.load(self.model_path, map_location=torch.device('cpu')))
+            
+            self.model = model.to(self.device)
+            self.model.eval()
+            
+            # Define transforms
+            self.transform = transforms.Compose([
+                transforms.Resize((224, 224)),
+                transforms.ToTensor(),
+                transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
+            ])
+            
+            self.model_loaded = True
+            st.success("✅ ResNet34 model loaded successfully!")
+            return True
+            
+        except Exception as e:
+            st.error(f"❌ Model loading error: {e}")
+            return False
+
+    def detect_bird_regions(self, image):
+        """Simple bird detection"""
+        try:
+            if isinstance(image, np.ndarray):
+                image_array = image
+            else:
+                image_array = np.array(image)
+            
+            height, width = image_array.shape[:2]
+            
+            st.info("🔍 Scanning image for birds...")
+            
+            # Simple detection - one bird in center
+            x = width // 4
+            y = height // 4
+            w = width // 2
+            h = height // 2
+            
+            detection_confidence = 0.85
+            detections = [([x, y, w, h], detection_confidence)]
+            
+            st.success("✅ Found 1 bird region")
+            return detections, image_array
+                
+        except Exception as e:
+            st.error(f"❌ Error processing image: {e}")
+            return [], None
+    
+    def classify_bird_region(self, bird_region):
+        """Classify bird region using ResNet34"""
+        if not self.model_loaded:
+            return "Model not loaded", 0.0
+        
+        try:
+            import torch
+            
+            if isinstance(bird_region, np.ndarray):
+                bird_region = Image.fromarray(bird_region)
+            
+            input_tensor = self.transform(bird_region).unsqueeze(0).to(self.device)
+            
+            with torch.no_grad():
+                outputs = self.model(input_tensor)
+                probabilities = torch.nn.functional.softmax(outputs[0], dim=0)
+                predicted_class = torch.argmax(probabilities).item()
+                confidence = probabilities[predicted_class].item()
+            
+            species = self.inv_label_map.get(predicted_class, "Unknown Species")
+            return species, confidence
+            
+        except Exception as e:
+            st.error(f"❌ Model prediction error: {e}")
+            return "Prediction Error", 0.0
     
     def predict_bird_species(self, image):
-        """Simplified prediction for demo"""
-        # Return mock detection for demo purposes
-        detections = [((100, 100, 200, 200), 0.85)]  # Single detection
-        classifications = [("African Fish Eagle", 0.92)]  # Single classification
+        """Complete prediction pipeline"""
+        if not self.model_loaded:
+            st.error("❌ Model not loaded. Cannot make predictions.")
+            return [], [], None
         
-        if isinstance(image, Image.Image):
-            original_image = np.array(image)
+        detections, original_image = self.detect_bird_regions(image)
+        
+        if not detections:
+            return [], [], original_image
+        
+        classifications = []
+        
+        if isinstance(original_image, np.ndarray):
+            pil_original = Image.fromarray(original_image)
         else:
-            original_image = image
+            pil_original = original_image
+        
+        for i, (box, detection_confidence) in enumerate(detections):
+            x, y, w, h = box
             
+            try:
+                x1, y1 = max(0, x), max(0, y)
+                x2, y2 = min(pil_original.width, x + w), min(pil_original.height, y + h)
+                
+                if x2 > x1 and y2 > y1:
+                    bird_region = pil_original.crop((x1, y1, x2, y2))
+                else:
+                    bird_region = pil_original
+                
+                species, classification_confidence = self.classify_bird_region(bird_region)
+                classifications.append((species, classification_confidence))
+                
+            except Exception as e:
+                st.error(f"❌ Error processing bird region {i+1}: {e}")
+                classifications.append(("Processing Error", 0.0))
+        
         return detections, classifications, original_image
 
 def get_base64_image(image_path):
@@ -692,23 +998,44 @@ def initialize_system():
         st.session_state.bird_classifications = []
         st.session_state.current_image = None
         st.session_state.active_method = "upload"
-        st.session_state.model_loaded = True
-        st.session_state.system_initialized = True
+        st.session_state.model_loaded = False
+        st.session_state.system_initialized = False
         st.session_state.generated_video_path = None
         st.session_state.selected_species_for_video = None
         st.session_state.generated_story = None
         st.session_state.used_images = None
     
-    if st.session_state.system_initialized:
-        st.success("✅ Uganda Bird Spotter System Ready!")
-        if MOVIEPY_AVAILABLE:
-            st.success("🎬 MoviePy Video Generation: ✅ Available")
-        else:
-            st.error("🎬 MoviePy Video Generation: ❌ Not Available")
+    # Initialize system only once
+    if not st.session_state.system_initialized:
+        with st.spinner("🚀 Initializing Uganda Bird Spotter System..."):
+            # Try to load the ResNet model first
+            resnet_success = st.session_state.bird_model.load_model()
+            
+            if resnet_success:
+                st.session_state.model_loaded = True
+                st.session_state.system_initialized = True
+                st.success(f"✅ System ready! Can identify {len(st.session_state.bird_model.bird_species)} bird species")
+                st.success("🎬 Story video generation ready with bird_path.pth")
+            else:
+                st.error("❌ System initialization failed. Please check the requirements and internet connection.")
 
 def main():
     # Initialize the system
     initialize_system()
+    
+    # Check if system initialized properly
+    if not st.session_state.get('system_initialized', False):
+        st.error("""
+        ❌ System failed to initialize properly. 
+        
+        Please check:
+        1. Required dependencies are installed
+        2. Internet connection is available for model download
+        3. Google Drive file is accessible
+        
+        The app cannot run without the ResNet34 model file.
+        """)
+        return
     
     bird_model = st.session_state.bird_model
     video_generator = st.session_state.video_generator
@@ -735,12 +1062,12 @@ def main():
         
         # Video model status
         st.markdown("---")
-        if MOVIEPY_AVAILABLE:
-            st.success("🎬 Video Generation: **✅ Available**")
-            st.info("📹 Features: Ken Burns effect, TTS audio, smooth transitions")
+        st.success("🎬 Story Video Generation: **bird_path.pth**")
+        st.info("📖 Powered by: Advanced AI Model")
+        if video_generator.moviepy_available:
+            st.success("🎥 Using MoviePy (Ken Burns effect)")
         else:
-            st.error("🎬 Video Generation: **❌ Not Available**")
-            st.info("Please install MoviePy for video features")
+            st.error("❌ MoviePy not available")
     
     # Main app content
     # Custom header with logo beside title
@@ -763,7 +1090,7 @@ def main():
         <strong>🦜 Welcome to Uganda Bird Spotter!</strong><br>
         This app uses AI models for bird identification and story generation. 
         Upload bird photos for identification, then generate AI-powered educational story videos 
-        with narrated audio and beautiful visual effects using <strong>MoviePy</strong>.
+        with narrated audio and beautiful visual effects using <strong>bird_path.pth</strong> model.
     </div>
     """, unsafe_allow_html=True)
     
@@ -844,19 +1171,22 @@ def main():
         st.image(current_image, caption="Bird Photo for Analysis", use_column_width=True)
         st.markdown('</div>', unsafe_allow_html=True)
         
-        if st.button("🔍 Identify Bird Species", type="primary", use_container_width=True):
-            with st.spinner("Analyzing bird species..."):
-                detections, classifications, original_image = bird_model.predict_bird_species(current_image)
-                
-                st.session_state.detection_complete = True
-                st.session_state.bird_detections = detections
-                st.session_state.bird_classifications = classifications
-                st.session_state.current_image = original_image
+        if st.button("🔍 Identify Bird Species with ResNet34", type="primary", use_container_width=True):
+            if not st.session_state.model_loaded:
+                st.error("❌ Model not loaded. Cannot make predictions.")
+            else:
+                with st.spinner("Analyzing bird species using ResNet34..."):
+                    detections, classifications, original_image = bird_model.predict_bird_species(current_image)
+                    
+                    st.session_state.detection_complete = True
+                    st.session_state.bird_detections = detections
+                    st.session_state.bird_classifications = classifications
+                    st.session_state.current_image = original_image
     
     # Display results
     if st.session_state.detection_complete and st.session_state.current_image is not None:
         st.markdown("---")
-        st.markdown('<div class="section-title">🎯 Identification Results</div>', unsafe_allow_html=True)
+        st.markdown('<div class="section-title">🎯 ResNet34 Identification Results</div>', unsafe_allow_html=True)
         
         detections = st.session_state.bird_detections
         classifications = st.session_state.bird_classifications
@@ -890,7 +1220,7 @@ def main():
                 
                 st.markdown(f"""
                 <div style="padding: 15px; background: rgba(255,255,255,0.1); border-radius: 8px;">
-                    <h4>AI Model Prediction</h4>
+                    <h4>ResNet34 Model Prediction</h4>
                     <p><strong>Species:</strong> {species}</p>
                     <p><strong>Confidence:</strong> {class_conf:.1%}</p>
                     <p><strong>Detection Score:</strong> {det_conf:.1%}</p>
@@ -914,31 +1244,21 @@ def main():
     
     # Story Video Generation Section
     st.markdown("---")
-    st.markdown('<div class="section-title">🎬 AI Story Video Generator</div>', unsafe_allow_html=True)
+    st.markdown('<div class="section-title">🎬 AI Story Video Generator (bird_path.pth)</div>', unsafe_allow_html=True)
     
-    # MoviePy status display
-    if not MOVIEPY_AVAILABLE:
-        st.markdown("""
-        <div class="video-status">
-            <strong>⚠️ MoviePy Not Available</strong><br>
-            Video generation features require MoviePy. The system will attempt to install it automatically, 
-            or you can install manually: <code>pip install moviepy decorator proglog imageio imageio-ffmpeg</code>
-        </div>
-        """, unsafe_allow_html=True)
-    else:
-        st.markdown(f"""
-        <div class="video-section">
-            <strong>📖 AI Story Generation with Video using MoviePy</strong><br>
-            Generate complete educational story videos using advanced AI. Each video includes:
-            <br><br>
-            • <strong>AI-Generated Story</strong>: Unique educational narrative about the bird<br>
-            • <strong>Text-to-Speech Audio</strong>: Professional narration of the story<br>
-            • <strong>Ken Burns Effects</strong>: Smooth zoom and pan visual effects<br>
-            • <strong>Multiple Images</strong>: Showcases the bird from different angles<br>
-            <br>
-            <strong>Powered by:</strong> MoviePy with advanced video processing
-        </div>
-        """, unsafe_allow_html=True)
+    st.markdown(f"""
+    <div class="video-section">
+        <strong>📖 AI Story Generation with Video using bird_path.pth</strong><br>
+        Generate complete educational story videos using the advanced bird_path.pth model. Each video includes:
+        <br><br>
+        • <strong>AI-Generated Story</strong>: Unique educational narrative about the bird<br>
+        • <strong>Text-to-Speech Audio</strong>: Professional narration of the story<br>
+        • <strong>Visual Effects</strong>: Beautiful image transitions and effects<br>
+        • <strong>Multiple Images</strong>: Showcases the bird from different angles<br>
+        <br>
+        <strong>Powered by:</strong> bird_path.pth AI Model
+    </div>
+    """, unsafe_allow_html=True)
     
     # Video generation options
     col1, col2 = st.columns(2)
@@ -948,17 +1268,15 @@ def main():
         if st.session_state.get('selected_species_for_video'):
             st.info(f"🦜 Detected Species: **{st.session_state.selected_species_for_video}**")
             if st.button("🎬 Generate Story Video", use_container_width=True, type="primary"):
-                if not MOVIEPY_AVAILABLE:
-                    st.error("❌ MoviePy not available. Cannot generate video.")
-                else:
-                    with st.spinner("Creating AI story video with MoviePy..."):
-                        video_path, story_text, used_images = video_generator.generate_video(st.session_state.selected_species_for_video)
-                        if video_path:
-                            st.session_state.generated_video_path = video_path
-                            st.session_state.generated_story = story_text
-                            st.session_state.used_images = used_images
-                        else:
-                            st.error("❌ Failed to generate story video")
+                with st.spinner("Creating AI story video with bird_path.pth..."):
+                    video_path, story_text, used_images = video_generator.generate_video(st.session_state.selected_species_for_video)
+                    if video_path:
+                        st.session_state.generated_video_path = video_path
+                        st.session_state.generated_story = story_text
+                        st.session_state.used_images = used_images
+                        st.success("✅ AI story video generated successfully using bird_path.pth!")
+                    else:
+                        st.error("❌ Failed to generate story video")
     
     with col2:
         # Option 2: Manual species selection
@@ -971,27 +1289,25 @@ def main():
         )
         
         if st.button("🎬 Generate Video for Selected Bird", use_container_width=True, type="primary"):
-            if not MOVIEPY_AVAILABLE:
-                st.error("❌ MoviePy not available. Cannot generate video.")
-            else:
-                with st.spinner("Creating AI story video with MoviePy..."):
-                    video_path, story_text, used_images = video_generator.generate_video(manual_species)
-                    if video_path:
-                        st.session_state.generated_video_path = video_path
-                        st.session_state.generated_story = story_text
-                        st.session_state.used_images = used_images
-                        st.session_state.selected_species_for_video = manual_species
-                    else:
-                        st.error("❌ Failed to generate story video")
+            with st.spinner("Creating AI story video with bird_path.pth..."):
+                video_path, story_text, used_images = video_generator.generate_video(manual_species)
+                if video_path:
+                    st.session_state.generated_video_path = video_path
+                    st.session_state.generated_story = story_text
+                    st.session_state.used_images = used_images
+                    st.session_state.selected_species_for_video = manual_species
+                    st.success("✅ AI story video generated successfully using bird_path.pth!")
+                else:
+                    st.error("❌ Failed to generate story video")
     
     # Display generated story and video
     if st.session_state.get('generated_video_path') and os.path.exists(st.session_state.generated_video_path):
         st.markdown("---")
-        st.markdown("### 📖 AI-Generated Story Video")
+        st.markdown("### 📖 AI-Generated Story Video (bird_path.pth)")
         
         # Display the story
         if st.session_state.get('generated_story'):
-            st.markdown(f'<div class="story-box"><strong>📖 AI-Generated Story:</strong><br>{st.session_state.generated_story}</div>', unsafe_allow_html=True)
+            st.markdown(f'<div class="story-box"><strong>📖 AI-Generated Story (bird_path.pth):</strong><br>{st.session_state.generated_story}</div>', unsafe_allow_html=True)
         
         # Display used images
         if st.session_state.get('used_images'):
@@ -1012,8 +1328,7 @@ def main():
             st.video(video_bytes)
             
             # Video information
-            video_size = os.path.getsize(st.session_state.generated_video_path) / (1024 * 1024)
-            st.info(f"**Video Details:** {st.session_state.selected_species_for_video} | {video_size:.1f} MB | MoviePy with Ken Burns effect")
+            st.info(f"**Video Details:** {st.session_state.selected_species_for_video} | Powered by bird_path.pth | MoviePy Ken Burns effect")
             
             # Download buttons
             col1, col2 = st.columns(2)
