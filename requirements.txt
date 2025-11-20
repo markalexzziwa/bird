@@ -20,3 +20,4 @@ torch
 torchvision
 gtts
 moviepy
+cv2
