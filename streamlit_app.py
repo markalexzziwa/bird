@@ -180,41 +180,6 @@ TEMPLATES = [
     "By the shores of Lake Mburo, the {name} reflects in calm waters. {desc} Its {color_phrase} feathers mirror the peace of the savanna night."
 ]
 
-# ========== SIMPLE BIRD DATA LOADING (Like the working code) ==========
-@st.cache_resource
-def load_bird_data():
-    """Load bird data using the same simple pattern as the working code"""
-    pth_path = "bird_data.pth"
-    if not os.path.exists(pth_path):
-        st.error(f"Missing `{pth_path}`. Upload it to your app folder.")
-        return {}
-    try:
-        return torch.load(pth_path, map_location="cpu")
-    except Exception as e:
-        st.error(f"Error loading bird data: {e}")
-        return {}
-
-# Load bird data at startup
-bird_db = load_bird_data()
-
-# ========== SIMPLE VIDEO MODEL LOADING ==========
-@st.cache_resource
-def load_video_model():
-    """Load video model using the same simple pattern"""
-    pth_path = "bird_path.pth"
-    if not os.path.exists(pth_path):
-        st.warning(f"Video model `{pth_path}` not found. Using default story generation.")
-        return None
-    try:
-        model_data = torch.load(pth_path, map_location="cpu")
-        return model_data
-    except Exception as e:
-        st.warning(f"Error loading video model: {e}. Using default story generation.")
-        return None
-
-# Load video model at startup
-video_model_data = load_video_model()
-
 class BirdStoryGenerator:
     def __init__(self, templates): 
         self.templates = templates
@@ -227,6 +192,121 @@ class BirdStoryGenerator:
         tmpl = random.choice(self.templates)
         return tmpl.format(name=name, color_phrase=color_phrase, desc=desc)
 
+# ========== SIMPLE FILE DOWNLOADER (Like resnet.pth) ==========
+def download_file_from_gdrive(file_id, destination):
+    """Download file from Google Drive using the same pattern as resnet.pth"""
+    try:
+        if not os.path.exists(destination):
+            st.info(f"📥 Downloading file from Google Drive...")
+            
+            # Method 1: Using gdown (most reliable)
+            try:
+                import gdown
+                url = f'https://drive.google.com/uc?id={file_id}'
+                gdown.download(url, destination, quiet=False)
+                
+            except ImportError:
+                st.warning("gdown not available, trying requests...")
+                # Method 2: Using requests with cookie handling
+                session = requests.Session()
+                
+                # First, get the confirmation token
+                url = f"https://docs.google.com/uc?export=download&id={file_id}"
+                response = session.get(url, stream=True)
+                
+                # Check for download confirmation
+                for key, value in response.cookies.items():
+                    if key.startswith('download_warning'):
+                        # Need to confirm the download
+                        params = {'confirm': value, 'id': file_id}
+                        response = session.get(url, params=params, stream=True)
+                        break
+                
+                # Download with progress
+                total_size = int(response.headers.get('content-length', 0))
+                block_size = 8192
+                progress_bar = st.progress(0)
+                status_text = st.empty()
+                
+                with open(destination, 'wb') as f:
+                    downloaded = 0
+                    for chunk in response.iter_content(chunk_size=block_size):
+                        if chunk:
+                            f.write(chunk)
+                            downloaded += len(chunk)
+                            if total_size > 0:
+                                progress = min(downloaded / total_size, 1.0)
+                                progress_bar.progress(progress)
+                                status_text.text(f"Downloaded: {downloaded/(1024*1024):.1f} MB / {total_size/(1024*1024):.1f} MB")
+                
+                progress_bar.empty()
+                status_text.empty()
+        
+        # Verify download
+        if os.path.exists(destination):
+            file_size = os.path.getsize(destination) / (1024 * 1024)
+            if file_size > 1:  # Ensure file is not empty/corrupted
+                st.success(f"✅ File downloaded successfully! ({file_size:.1f} MB)")
+                return True
+            else:
+                st.error("❌ Downloaded file is too small - may be corrupted")
+                if os.path.exists(destination):
+                    os.remove(destination)
+                return False
+        else:
+            st.error("❌ Failed to download file")
+            return False
+            
+    except Exception as e:
+        st.error(f"❌ Download error: {e}")
+        return False
+
+# ========== BIRD DATA LOADING ==========
+@st.cache_resource
+def load_bird_data():
+    """Load bird data with download from Google Drive"""
+    pth_path = "bird_data.pth"
+    file_id = "YOUR_BIRD_DATA_FILE_ID"  # Replace with actual file ID if needed
+    
+    # Try to download if file doesn't exist
+    if not os.path.exists(pth_path):
+        st.warning(f"bird_data.pth not found. Please ensure it's in the app directory.")
+        return {}
+    
+    try:
+        return torch.load(pth_path, map_location="cpu")
+    except Exception as e:
+        st.error(f"Error loading bird data: {e}")
+        return {}
+
+# Load bird data at startup
+bird_db = load_bird_data()
+
+# ========== VIDEO MODEL LOADING ==========
+@st.cache_resource
+def load_video_model():
+    """Load video model with download from Google Drive"""
+    pth_path = "bird_path.pth"
+    file_id = "1J9T5r5TboWzvqAPQHmfvQmozor_wmmPz"  # From your Google Drive link
+    
+    # Download the file if it doesn't exist
+    if not os.path.exists(pth_path):
+        success = download_file_from_gdrive(file_id, pth_path)
+        if not success:
+            st.warning("❌ Could not download bird_path.pth. Using default story generation.")
+            return None
+    
+    try:
+        model_data = torch.load(pth_path, map_location="cpu")
+        st.success("✅ Video story model loaded successfully!")
+        return model_data
+    except Exception as e:
+        st.warning(f"❌ Error loading video model: {e}. Using default story generation.")
+        return None
+
+# Load video model at startup
+video_model_data = load_video_model()
+
 class AdvancedVideoGenerator:
     def __init__(self):
         self.csv_path = './birdsuganda.csv'
@@ -236,10 +316,8 @@ class AdvancedVideoGenerator:
         # Use loaded video model or fallback to default
         if self.model_loaded:
             self.story_generator = self._create_story_generator_from_model(video_model_data)
-            st.success("✅ Advanced story generation model loaded!")
         else:
             self.story_generator = BirdStoryGenerator(TEMPLATES)
-            st.info("📖 Using default story generation")
         
         self.moviepy_available = MOVIEPY_AVAILABLE
         
@@ -567,7 +645,7 @@ class AdvancedVideoGenerator:
         """Main video generation function with story and audio"""
         return self.generate_story_video(species_name)
 
-# ========== RESNET MODEL (Keep the same as before) ==========
+# ========== RESNET MODEL (Same download pattern) ==========
 class ResNet34BirdModel:
     def __init__(self):
         self.model_loaded = False
@@ -581,100 +659,8 @@ class ResNet34BirdModel:
         
     def download_model_from_gdrive(self):
         """Download model from Google Drive using the direct link"""
-        try:
-            if not os.path.exists(self.model_path):
-                st.info("📥 Downloading ResNet34 model from Google Drive...")
-                
-                # Your Google Drive file ID from the link
-                file_id = "1yfiYcz6e2hWtQTXW6AZVU-iwSUjDP92y"
-                
-                # Method 1: Using gdown (most reliable)
-                try:
-                    import gdown
-                    # Direct download URL for gdown
-                    url = f'https://drive.google.com/uc?id={file_id}'
-                    output = self.model_path
-                    gdown.download(url, output, quiet=False)
-                    
-                except ImportError:
-                    st.warning("gdown not available, trying requests...")
-                    # Method 2: Using requests with cookie handling
-                    session = requests.Session()
-                    
-                    # First, get the confirmation token
-                    url = f"https://docs.google.com/uc?export=download&id={file_id}"
-                    response = session.get(url, stream=True)
-                    
-                    # Check for download confirmation
-                    for key, value in response.cookies.items():
-                        if key.startswith('download_warning'):
-                            # Need to confirm the download
-                            params = {'confirm': value, 'id': file_id}
-                            response = session.get(url, params=params, stream=True)
-                            break
-                    
-                    # Download with progress
-                    total_size = int(response.headers.get('content-length', 0))
-                    block_size = 8192
-                    progress_bar = st.progress(0)
-                    status_text = st.empty()
-                    
-                    with open(self.model_path, 'wb') as f:
-                        downloaded = 0
-                        for chunk in response.iter_content(chunk_size=block_size):
-                            if chunk:
-                                f.write(chunk)
-                                downloaded += len(chunk)
-                                if total_size > 0:
-                                    progress = min(downloaded / total_size, 1.0)
-                                    progress_bar.progress(progress)
-                                    status_text.text(f"Downloaded: {downloaded/(1024*1024):.1f} MB / {total_size/(1024*1024):.1f} MB")
-                    
-                    progress_bar.empty()
-                    status_text.empty()
-            
-            # Verify download
-            if os.path.exists(self.model_path):
-                file_size = os.path.getsize(self.model_path) / (1024 * 1024)
-                if file_size > 1:  # Ensure file is not empty/corrupted
-                    st.success(f"✅ Model downloaded successfully! ({file_size:.1f} MB)")
-                    return True
-                else:
-                    st.error("❌ Downloaded file is too small - may be corrupted")
-                    if os.path.exists(self.model_path):
-                        os.remove(self.model_path)
-                    return False
-            else:
-                st.error("❌ Failed to download model file")
-                return False
-                
-        except Exception as e:
-            st.error(f"❌ Download error: {e}")
-            # Try one more method as fallback
-            return self.download_model_fallback()
+        return download_file_from_gdrive("1yfiYcz6e2hWtQTXW6AZVU-iwSUjDP92y", self.model_path)
     
-    def download_model_fallback(self):
-        """Final fallback download method"""
-        try:
-            st.info("🔄 Trying final download method...")
-            
-            # Direct download URL format
-            file_id = "1yfiYcz6e2hWtQTXW6AZVU-iwSUjDP92y"
-            direct_url = f"https://drive.google.com/uc?export=download&id={file_id}"
-            
-            # Simple urllib download
-            urllib.request.urlretrieve(direct_url, self.model_path)
-            
-            if os.path.exists(self.model_path) and os.path.getsize(self.model_path) > 1000000:
-                file_size = os.path.getsize(self.model_path) / (1024 * 1024)
-                st.success(f"✅ Model downloaded via fallback method! ({file_size:.1f} MB)")
-                return True
-            return False
-            
-        except Exception as e:
-            st.error(f"❌ All download methods failed: {e}")
-            return False
-
     def check_dependencies(self):
         """Check if PyTorch and torchvision are available"""
         try:
