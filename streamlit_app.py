@@ -332,7 +332,7 @@ def load_bird_data():
                 continue
     
     # If not found, try to download
-    st.warning("bird_data.pth not found in standard locations. Please ensure it's in the app directory.")
+    st.warning("bird_data.pth not found in standard locations. Using placeholder data.")
     return {}
 
 # Load bird data at startup
@@ -455,15 +455,49 @@ def ken_burns_effect(image_path, duration=4.0, zoom_direction="random"):
         # Fallback: simple image clip
         return ImageClip(image_path).set_duration(duration).fadein(0.3).fadeout(0.3)
 
+def get_audio_duration(audio_path):
+    """Get audio duration with multiple fallback methods"""
+    try:
+        # Method 1: Try librosa
+        try:
+            import librosa
+            return librosa.get_duration(filename=audio_path)
+        except ImportError:
+            pass
+        
+        # Method 2: Try wave module (built-in)
+        try:
+            import wave
+            import contextlib
+            with contextlib.closing(wave.open(audio_path, 'r')) as f:
+                frames = f.getnframes()
+                rate = f.getframerate()
+                return frames / float(rate)
+        except:
+            pass
+        
+        # Method 3: Try moviepy
+        try:
+            audio_clip = AudioFileClip(audio_path)
+            duration = audio_clip.duration
+            audio_clip.close()
+            return duration
+        except:
+            pass
+        
+        # Final fallback
+        st.warning("⚠️ Could not determine audio duration, using default")
+        return 15  # Default duration in seconds
+        
+    except Exception as e:
+        st.warning(f"⚠️ Error getting audio duration: {e}, using default")
+        return 15
+
 def create_slideshow_video_opencv(images, audio_path, output_path):
     """Create slideshow video using OpenCV (fallback when MoviePy not available)"""
     try:
-        # Get audio duration
-        try:
-            import librosa
-            audio_duration = librosa.get_duration(filename=audio_path)
-        except:
-            audio_duration = 15  # Fallback duration
+        # Get audio duration with enhanced fallbacks
+        audio_duration = get_audio_duration(audio_path)
         
         # Video properties
         frame_width = 1280
