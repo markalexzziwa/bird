@@ -1268,7 +1268,7 @@ def main():
                     )
             
         except Exception as e:
-            st.error(f"❌ Error displaying 113video: {e}")
+            st.error(f"❌ Error displaying video: {e}")
 
 if __name__ == "__main__":
     main()
