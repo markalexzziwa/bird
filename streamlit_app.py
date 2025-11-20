@@ -25,7 +25,6 @@ try:
     )
     from moviepy.audio.fx.all import audio_fadein, audio_fadeout
     from moviepy.video.fx.all import resize
-    from moviepy.config import change_settings
     MOVIEPY_AVAILABLE = True
 except ImportError:
     MOVIEPY_AVAILABLE = False
@@ -181,6 +180,41 @@ TEMPLATES = [
     "By the shores of Lake Mburo, the {name} reflects in calm waters. {desc} Its {color_phrase} feathers mirror the peace of the savanna night."
 ]
 
+# ========== SIMPLE BIRD DATA LOADING (Like the working code) ==========
+@st.cache_resource
+def load_bird_data():
+    """Load bird data using the same simple pattern as the working code"""
+    pth_path = "bird_data.pth"
+    if not os.path.exists(pth_path):
+        st.error(f"Missing `{pth_path}`. Upload it to your app folder.")
+        return {}
+    try:
+        return torch.load(pth_path, map_location="cpu")
+    except Exception as e:
+        st.error(f"Error loading bird data: {e}")
+        return {}
+
+# Load bird data at startup
+bird_db = load_bird_data()
+
+# ========== SIMPLE VIDEO MODEL LOADING ==========
+@st.cache_resource
+def load_video_model():
+    """Load video model using the same simple pattern"""
+    pth_path = "bird_path.pth"
+    if not os.path.exists(pth_path):
+        st.warning(f"Video model `{pth_path}` not found. Using default story generation.")
+        return None
+    try:
+        model_data = torch.load(pth_path, map_location="cpu")
+        return model_data
+    except Exception as e:
+        st.warning(f"Error loading video model: {e}. Using default story generation.")
+        return None
+
+# Load video model at startup
+video_model_data = load_video_model()
+
 class BirdStoryGenerator:
     def __init__(self, templates): 
         self.templates = templates
@@ -196,180 +230,42 @@ class BirdStoryGenerator:
 class AdvancedVideoGenerator:
     def __init__(self):
         self.csv_path = './birdsuganda.csv'
-        self.video_model_path = './bird_path.pth'
         self.bird_data = None
-        self.video_model = None
-        self.model_loaded = False
+        self.model_loaded = video_model_data is not None
         self.video_duration = 20
-        self.story_generator = None
+        # Use loaded video model or fallback to default
+        if self.model_loaded:
+            self.story_generator = self._create_story_generator_from_model(video_model_data)
+            st.success("✅ Advanced story generation model loaded!")
+        else:
+            self.story_generator = BirdStoryGenerator(TEMPLATES)
+            st.info("📖 Using default story generation")
+        
         self.moviepy_available = MOVIEPY_AVAILABLE
         
-    def download_video_model(self):
-        """Download the video generation model from Google Drive (same method as resnet)"""
+    def _create_story_generator_from_model(self, model_data):
+        """Create story generator from loaded model data"""
         try:
-            if not os.path.exists(self.video_model_path):
-                st.info("📥 Downloading advanced video generation model from Google Drive...")
-                
-                # Google Drive file ID for the video model
-                file_id = "1J9T5r5TboWzvqAPQHmfvQmozor_wmmPz"
-                
-                # Method 1: Using gdown (same as resnet)
-                try:
-                    import gdown
-                    url = f'https://drive.google.com/uc?id={file_id}'
-                    gdown.download(url, self.video_model_path, quiet=False)
-                    
-                except ImportError:
-                    st.warning("gdown not available, trying requests...")
-                    # Method 2: Using requests with cookie handling (same as resnet)
-                    session = requests.Session()
-                    
-                    # First, get the confirmation token
-                    url = f"https://docs.google.com/uc?export=download&id={file_id}"
-                    response = session.get(url, stream=True)
-                    
-                    # Check for download confirmation
-                    for key, value in response.cookies.items():
-                        if key.startswith('download_warning'):
-                            # Need to confirm the download
-                            params = {'confirm': value, 'id': file_id}
-                            response = session.get(url, params=params, stream=True)
-                            break
-                    
-                    # Download with progress
-                    total_size = int(response.headers.get('content-length', 0))
-                    block_size = 8192
-                    progress_bar = st.progress(0)
-                    status_text = st.empty()
-                    
-                    with open(self.video_model_path, 'wb') as f:
-                        downloaded = 0
-                        for chunk in response.iter_content(chunk_size=block_size):
-                            if chunk:
-                                f.write(chunk)
-                                downloaded += len(chunk)
-                                if total_size > 0:
-                                    progress = min(downloaded / total_size, 1.0)
-                                    progress_bar.progress(progress)
-                                    status_text.text(f"Downloaded: {downloaded/(1024*1024):.1f} MB / {total_size/(1024*1024):.1f} MB")
-                    
-                    progress_bar.empty()
-                    status_text.empty()
-            
-            # Verify download (same verification as resnet)
-            if os.path.exists(self.video_model_path):
-                file_size = os.path.getsize(self.video_model_path) / (1024 * 1024)
-                if file_size > 1:  # Ensure file is not empty/corrupted
-                    st.success(f"✅ Video model downloaded successfully! ({file_size:.1f} MB)")
-                    return True
-                else:
-                    st.error("❌ Downloaded video model is too small - may be corrupted")
-                    if os.path.exists(self.video_model_path):
-                        os.remove(self.video_model_path)
-                    return False
-            else:
-                st.error("❌ Failed to download video model")
-                return False
-                
-        except Exception as e:
-            st.error(f"❌ Video model download error: {e}")
-            # Try fallback method (same as resnet)
-            return self.download_video_model_fallback()
-
-    def download_video_model_fallback(self):
-        """Final fallback download method for video model"""
-        try:
-            st.info("🔄 Trying final download method for video model...")
-            
-            # Direct download URL format (same as resnet)
-            file_id = "1J9T5r5TboWzvqAPQHmfvQmozor_wmmPz"
-            direct_url = f"https://drive.google.com/uc?export=download&id={file_id}"
-            
-            # Simple urllib download
-            urllib.request.urlretrieve(direct_url, self.video_model_path)
-            
-            if os.path.exists(self.video_model_path) and os.path.getsize(self.video_model_path) > 1000000:
-                file_size = os.path.getsize(self.video_model_path) / (1024 * 1024)
-                st.success(f"✅ Video model downloaded via fallback method! ({file_size:.1f} MB)")
-                return True
-            return False
-            
-        except Exception as e:
-            st.error(f"❌ All video model download methods failed: {e}")
-            return False
-
-    def load_video_model(self):
-        """Load the advanced video generation model with story capabilities"""
-        if not os.path.exists(self.video_model_path):
-            if not self.download_video_model():
-                st.error("❌ Could not download the video model file from Google Drive.")
-                st.info("""
-                Please ensure:
-                1. The Google Drive file is publicly accessible
-                2. The file ID is correct: 1J9T5r5TboWzvqAPQHmfvQmozor_wmmPz
-                3. You have internet connection
-                """)
-                # Initialize default story generator as fallback
-                self.story_generator = BirdStoryGenerator(TEMPLATES)
-                self.model_loaded = True
-                st.success("✅ Using default story generation (fallback mode)")
-                return True
-        
-        try:
-            # Load the model with the same method as resnet
-            st.info("🔄 Loading advanced story and video generation model...")
-            
-            if torch.cuda.is_available():
-                model_data = torch.load(self.video_model_path)
-            else:
-                model_data = torch.load(self.video_model_path, map_location=torch.device('cpu'))
-            
-            # Check what type of model we loaded
             if isinstance(model_data, dict):
-                # It's a state dict or model weights
                 if 'story_generator' in model_data:
-                    # Load the story generator from the model data
-                    self.story_generator = model_data['story_generator']
-                    self.model_loaded = True
-                    st.success("✅ Advanced story generation model loaded successfully!")
-                else:
-                    # Create a compatible story generator
-                    self.story_generator = BirdStoryGenerator(TEMPLATES)
-                    self.model_loaded = True
-                    st.success("✅ Story generation capabilities initialized with model weights!")
+                    return model_data['story_generator']
+                elif 'templates' in model_data:
+                    return BirdStoryGenerator(model_data['templates'])
             elif hasattr(model_data, 'generate_story'):
-                # It's a model object with generate_story method
-                self.story_generator = model_data
-                self.model_loaded = True
-                st.success("✅ Advanced story generation model object loaded!")
+                return model_data
             else:
-                # Fallback to default story generator
-                self.story_generator = BirdStoryGenerator(TEMPLATES)
-                self.model_loaded = True
-                st.success("✅ Using enhanced story generation with loaded model data!")
-            
-            return True
-            
-        except Exception as e:
-            st.error(f"❌ Video model loading failed: {e}")
-            # Initialize default story generator as fallback
-            self.story_generator = BirdStoryGenerator(TEMPLATES)
-            self.model_loaded = True
-            st.success("✅ Using default story generation (fallback due to loading error)")
-            return True
+                return BirdStoryGenerator(TEMPLATES)
+        except:
+            return BirdStoryGenerator(TEMPLATES)
 
     def load_bird_data(self):
         """Load and process the bird species data from local CSV"""
         try:
             if os.path.exists(self.csv_path):
                 self.bird_data = pd.read_csv(self.csv_path)
-                st.success(f"✅ Loaded data for {len(self.bird_data)} bird species from local CSV")
                 return True
             else:
-                st.error(f"❌ CSV file not found at: {self.csv_path}")
-                st.info("Please ensure 'birdsuganda.csv' is in the app directory")
                 return False
-                
         except Exception as e:
             st.error(f"❌ Error loading CSV: {e}")
             return False
@@ -402,7 +298,6 @@ class AdvancedVideoGenerator:
                     if len(bird_info) > 0:
                         return bird_info.iloc[0].to_dict()
             
-            st.warning(f"⚠️ No detailed information found for {species_name} in database")
             return None
                 
         except Exception as e:
@@ -672,6 +567,7 @@ class AdvancedVideoGenerator:
         """Main video generation function with story and audio"""
         return self.generate_story_video(species_name)
 
+# ========== RESNET MODEL (Keep the same as before) ==========
 class ResNet34BirdModel:
     def __init__(self):
         self.model_loaded = False
@@ -1022,20 +918,15 @@ def initialize_system():
             # Try to load the ResNet model first
             resnet_success = st.session_state.bird_model.load_model()
             
-            # Then load video generator
-            video_data_loaded = st.session_state.video_generator.load_bird_data()
-            video_model_loaded = st.session_state.video_generator.load_video_model()
-            
             if resnet_success:
                 st.session_state.model_loaded = True
                 st.session_state.system_initialized = True
                 
-                if video_model_loaded and st.session_state.video_generator.model_loaded:
+                if st.session_state.video_generator.model_loaded:
                     st.success(f"✅ System ready! Both models loaded - Can identify {len(st.session_state.bird_model.bird_species)} bird species and generate AI story videos")
                 else:
                     st.success(f"✅ System ready! ResNet34 model active - Can identify {len(st.session_state.bird_model.bird_species)} bird species")
-                    if video_data_loaded:
-                        st.info("📖 Basic story generation available")
+                    st.info("📖 Basic story generation available")
             else:
                 st.error("❌ System initialization failed. Please check the requirements and internet connection.")
 
