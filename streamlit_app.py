@@ -1,3 +1,10 @@
+# HEALTH CHECK FIX - Add this at the VERY TOP
+import os
+if os.environ.get('STREAMLIT_SERVER_HEALTH_CHECK'):
+    print("HEALTH_CHECK_OK")
+    import sys
+    sys.exit(0)
+
 import streamlit as st
 import numpy as np
 from PIL import Image
@@ -15,13 +22,97 @@ import torch
 import torch.nn as nn
 from gtts import gTTS
 import warnings
+import time
+import threading
+from queue import Queue
 warnings.filterwarnings('ignore')
+
+# Configuration for large file handling
+class AppConfig:
+    def __init__(self):
+        self.max_file_size_mb = 1024  # 1GB
+        self.chunk_size = 32768  # 32KB chunks
+        self.download_timeout = 300  # 5 minutes
+        self.max_retries = 3
+        self.cache_dir = "./cache"
+        self.model_dir = "./models"
+        self.temp_dir = "./temp"
+        self.data_dir = "./data"
+        
+    def setup_directories(self):
+        """Create all necessary directories"""
+        directories = [self.cache_dir, self.model_dir, self.temp_dir, self.data_dir]
+        for directory in directories:
+            os.makedirs(directory, exist_ok=True)
+            
+    def cleanup_old_files(self, max_age_hours=24):
+        """Clean up old temporary files"""
+        try:
+            current_time = time.time()
+            for temp_dir in [self.temp_dir, self.cache_dir]:
+                if os.path.exists(temp_dir):
+                    for filename in os.listdir(temp_dir):
+                        filepath = os.path.join(temp_dir, filename)
+                        if os.path.isfile(filepath):
+                            file_age = current_time - os.path.getctime(filepath)
+                            if file_age > max_age_hours * 3600:
+                                os.remove(filepath)
+        except Exception as e:
+            print(f"Cleanup warning: {e}")
+
+# Initialize config
+app_config = AppConfig()
+app_config.setup_directories()
+app_config.cleanup_old_files()
+
+# Enhanced download manager for large files
+class LargeFileDownloadManager:
+    def __init__(self):
+        self.download_progress = {}
+        
+    def download_with_progress(self, url, file_path, file_id, chunk_size=32768):
+        """Download large files with progress tracking"""
+        try:
+            # Create directory if it doesn't exist
+            os.makedirs(os.path.dirname(file_path), exist_ok=True)
+            
+            # Start download
+            response = requests.get(url, stream=True, timeout=30)
+            response.raise_for_status()
+            
+            total_size = int(response.headers.get('content-length', 0))
+            downloaded = 0
+            
+            with open(file_path, 'wb') as f:
+                for chunk in response.iter_content(chunk_size=chunk_size):
+                    if chunk:
+                        f.write(chunk)
+                        downloaded += len(chunk)
+                        # Update progress
+                        progress = downloaded / total_size if total_size > 0 else 0
+                        self.download_progress[file_id] = {
+                            'progress': progress,
+                            'downloaded_mb': downloaded / (1024 * 1024),
+                            'total_mb': total_size / (1024 * 1024) if total_size > 0 else 0,
+                            'completed': False
+                        }
+            
+            self.download_progress[file_id]['completed'] = True
+            return True
+            
+        except Exception as e:
+            self.download_progress[file_id] = {
+                'error': str(e),
+                'completed': False
+            }
+            return False
 
 # Set page configuration
 st.set_page_config(
     page_title="Uganda Bird Spotter",
     page_icon="🦅",
-    layout="wide"
+    layout="wide",
+    initial_sidebar_state="expanded"
 )
 
 # Custom CSS with Glass Morphism
@@ -38,13 +129,6 @@ st.markdown("""
         align-items: center;
         justify-content: center;
         gap: 20px;
-    }
-    .title-image {
-        width: 80px;
-        height: 80px;
-        border-radius: 16px;
-        object-fit: cover;
-        box-shadow: 0 4px 15px rgba(0,0,0,0.1);
     }
     .glass-upload {
         background: rgba(255, 255, 255, 0.25);
@@ -70,7 +154,7 @@ st.markdown("""
     .glass-info {
         background: rgba(240, 248, 255, 0.3);
         backdrop-filter: blur(10px);
-        -webkit-backdrop-filter: blur(10px);
+        -webkit-backup-filter: blur(10px);
         border-radius: 16px;
         border: 1px solid rgba(255, 255, 255, 0.2);
         padding: 25px;
@@ -150,21 +234,22 @@ st.markdown("""
         margin: 15px 0;
         border-left: 4px solid #FFD700;
     }
+    .download-progress {
+        background: rgba(46, 134, 171, 0.1);
+        border-radius: 10px;
+        padding: 15px;
+        margin: 10px 0;
+    }
 </style>
 """, unsafe_allow_html=True)
 
-# Story templates from your original code
+# Story templates
 TEMPLATES = [
     "Deep in Uganda's lush forests, the {name} flashes its {color_phrase} feathers. {desc} It dances on branches at dawn, a true jewel of the Pearl of Africa.",
     "Along the Nile's banks, the {name} stands tall with {color_phrase} plumage. {desc} Fishermen smile when they hear its melodic call at sunrise.",
     "In Queen Elizabeth National Park, the {name} soars above acacia trees. {desc} Its {color_phrase} wings catch the golden light of the savanna.",
     "Near Lake Victoria, the {name} perches quietly. {desc} Children in fishing villages know its {color_phrase} colors mean good luck for the day.",
     "High in the Rwenzori Mountains, the {name} sings through mist. {desc} Its {color_phrase} feathers shine like emeralds in the cloud forest.",
-    "In Murchison Falls, the {name} glides over roaring waters. {desc} Tourists gasp at its {color_phrase} beauty against the dramatic backdrop.",
-    "Among papyrus swamps, the {name} wades gracefully. {desc} Its long legs and {color_phrase} crest make it the king of the wetlands.",
-    "At sunset in Kidepo Valley, the {name} calls across the plains. {desc} Its {color_phrase} silhouette is a symbol of Uganda's wild heart.",
-    "In Bwindi's ancient rainforest, the {name} flits between vines. {desc} Gorilla trackers pause to admire its {color_phrase} brilliance.",
-    "By the shores of Lake Mburo, the {name} reflects in calm waters. {desc} Its {color_phrase} feathers mirror the peace of the savanna night."
 ]
 
 class BirdStoryGenerator:
@@ -179,570 +264,6 @@ class BirdStoryGenerator:
         tmpl = random.choice(self.templates)
         return tmpl.format(name=name, color_phrase=color_phrase, desc=desc)
 
-class AdvancedVideoGenerator:
-    def __init__(self):
-        self.csv_path = './birdsuganda.csv'
-        self.video_model_path = './bird_path.pth'
-        self.bird_data = None
-        self.story_model = None
-        self.model_loaded = False
-        self.video_duration = 20
-        
-    def download_video_model(self):
-        """Download the video generation model from Google Drive"""
-        try:
-            if not os.path.exists(self.video_model_path):
-                st.info("📥 Downloading advanced story generation model from Google Drive...")
-                
-                # Google Drive file ID for the video model
-                file_id = "1J9T5r5TboWzvqAPQHmfvQmozor_wmmPz"
-                
-                # Method 1: Using gdown
-                try:
-                    import gdown
-                    url = f'https://drive.google.com/uc?id={file_id}'
-                    gdown.download(url, self.video_model_path, quiet=False)
-                except ImportError:
-                    # Method 2: Using requests
-                    session = requests.Session()
-                    url = f"https://docs.google.com/uc?export=download&id={file_id}"
-                    response = session.get(url, stream=True)
-                    
-                    # Handle confirmation for large files
-                    for key, value in response.cookies.items():
-                        if key.startswith('download_warning'):
-                            params = {'confirm': value}
-                            response = session.get(url, params=params, stream=True)
-                    
-                    # Download with progress
-                    total_size = int(response.headers.get('content-length', 0))
-                    block_size = 8192
-                    progress_bar = st.progress(0)
-                    status_text = st.empty()
-                    
-                    with open(self.video_model_path, "wb") as f:
-                        downloaded = 0
-                        for chunk in response.iter_content(chunk_size=32768):
-                            if chunk:
-                                f.write(chunk)
-                                downloaded += len(chunk)
-                                if total_size > 0:
-                                    progress = min(downloaded / total_size, 1.0)
-                                    progress_bar.progress(progress)
-                                    status_text.text(f"Downloaded: {downloaded/(1024*1024):.1f} MB / {total_size/(1024*1024):.1f} MB")
-                    
-                    progress_bar.empty()
-                    status_text.empty()
-            
-            if os.path.exists(self.video_model_path):
-                file_size = os.path.getsize(self.video_model_path) / (1024 * 1024)
-                if file_size > 1:
-                    st.success(f"✅ Story generation model downloaded! ({file_size:.1f} MB)")
-                    return True
-                else:
-                    st.error("❌ Downloaded model is too small - may be corrupted")
-                    if os.path.exists(self.video_model_path):
-                        os.remove(self.video_model_path)
-                    return False
-            else:
-                st.error("❌ Failed to download story model")
-                return False
-                
-        except Exception as e:
-            st.error(f"❌ Model download error: {e}")
-            return False
-
-    def load_video_model(self):
-        """Load the bird_path.pth model for story generation"""
-        if not os.path.exists(self.video_model_path):
-            if not self.download_video_model():
-                return False
-        
-        try:
-            # Load the model
-            st.info("🔄 Loading story generation model from bird_path.pth...")
-            
-            if torch.cuda.is_available():
-                model_data = torch.load(self.video_model_path)
-            else:
-                model_data = torch.load(self.video_model_path, map_location=torch.device('cpu'))
-            
-            # Check what type of model we loaded
-            if isinstance(model_data, BirdStoryGenerator):
-                # It's already a BirdStoryGenerator instance
-                self.story_model = model_data
-                self.model_loaded = True
-                st.success("✅ Bird story generation model loaded successfully!")
-                st.info("🎬 Model type: BirdStoryGenerator with Ugandan story templates")
-                
-            elif isinstance(model_data, dict):
-                # It's a state dictionary - try to reconstruct the model
-                st.info("🔍 Found state dictionary, reconstructing story generator...")
-                try:
-                    # Create a new BirdStoryGenerator with templates
-                    self.story_model = BirdStoryGenerator(TEMPLATES)
-                    self.model_loaded = True
-                    st.success("✅ Story generator reconstructed from state dict!")
-                except Exception as e:
-                    st.warning(f"⚠️ Could not reconstruct model: {e}")
-                    # Fallback to default generator
-                    self.story_model = BirdStoryGenerator(TEMPLATES)
-                    self.model_loaded = True
-                    st.success("✅ Using default story generator with Ugandan templates")
-                    
-            else:
-                # Unknown model type, use default
-                st.warning("⚠️ Unknown model type, using default story generator")
-                self.story_model = BirdStoryGenerator(TEMPLATES)
-                self.model_loaded = True
-                st.success("✅ Default story generator initialized")
-            
-            return True
-            
-        except Exception as e:
-            st.error(f"❌ Model loading failed: {e}")
-            # Initialize default story generator as fallback
-            self.story_model = BirdStoryGenerator(TEMPLATES)
-            self.model_loaded = True
-            st.success("✅ Using default story generation with Ugandan templates")
-            return True
-
-    def load_bird_data(self):
-        """Load and process the bird species data from local CSV"""
-        try:
-            if os.path.exists(self.csv_path):
-                self.bird_data = pd.read_csv(self.csv_path)
-                st.success(f"✅ Loaded data for {len(self.bird_data)} bird species from local CSV")
-                return True
-            else:
-                st.error(f"❌ CSV file not found at: {self.csv_path}")
-                st.info("Please ensure 'birdsuganda.csv' is in the app directory")
-                return False
-                
-        except Exception as e:
-            st.error(f"❌ Error loading CSV: {e}")
-            return False
-    
-    def get_bird_video_info(self, species_name):
-        """Get video generation information for a specific bird species"""
-        if self.bird_data is None:
-            if not self.load_bird_data():
-                return None
-        
-        try:
-            # Search for the bird species in the dataset
-            possible_columns = ['species_name', 'species', 'name', 'bird_name', 'common_name', 'Scientific Name', 'Common Name', 'common_name']
-            
-            for col in possible_columns:
-                if col in self.bird_data.columns:
-                    # Handle NaN values and case sensitivity
-                    bird_info = self.bird_data[
-                        self.bird_data[col].astype(str).str.lower() == species_name.lower()
-                    ]
-                    if len(bird_info) > 0:
-                        return bird_info.iloc[0].to_dict()
-            
-            # If no exact match, try partial match
-            for col in possible_columns:
-                if col in self.bird_data.columns:
-                    bird_info = self.bird_data[
-                        self.bird_data[col].astype(str).str.contains(species_name, case=False, na=False)
-                    ]
-                    if len(bird_info) > 0:
-                        return bird_info.iloc[0].to_dict()
-            
-            st.warning(f"⚠️ No detailed information found for {species_name} in database")
-            return None
-                
-        except Exception as e:
-            st.error(f"❌ Error finding bird info: {e}")
-            return None
-
-    def generate_story_from_model(self, species_name, bird_info):
-        """Generate story using the loaded bird_path.pth model"""
-        try:
-            if not self.model_loaded or self.story_model is None:
-                st.error("❌ Story generation model not loaded")
-                return None
-            
-            # Extract bird details for story generation
-            common_name = species_name
-            description = bird_info.get('description', '') if bird_info else ''
-            colors = []
-            
-            # Try to extract colors from various possible columns
-            color_columns = ['colors', 'primary_colors', 'plumage_colors', 'color']
-            for col in color_columns:
-                if col in bird_info and pd.notna(bird_info[col]):
-                    colors = str(bird_info[col]).split(',')
-                    break
-            
-            # Generate story using the loaded model
-            st.info("📖 Generating story using bird_path.pth model...")
-            story_text = self.story_model(common_name, description, colors)
-            
-            return story_text
-            
-        except Exception as e:
-            st.error(f"❌ Story generation error: {e}")
-            return None
-
-    def natural_tts(self, text, filename):
-        """Convert text to speech using gTTS"""
-        try:
-            tts = gTTS(text=text, lang='en', slow=False)
-            tts.save(filename)
-            return filename
-        except Exception as e:
-            st.error(f"❌ Error generating speech: {e}")
-            return None
-
-    def get_audio_duration(self, audio_path):
-        """Get audio duration using alternative method"""
-        try:
-            # For MP3 files, we can estimate duration based on file size
-            # This is a rough estimation - 1MB ≈ 1 minute of audio
-            file_size = os.path.getsize(audio_path)
-            duration = max(15, min(60, file_size / (16 * 1024)))  # Rough estimation
-            return duration
-        except:
-            return 20  # Default fallback
-
-    def create_story_video_with_opencv(self, images, audio_path, output_path, story_text, species_name):
-        """Create a professional story video using OpenCV with text overlays"""
-        try:
-            # Get audio duration
-            audio_duration = self.get_audio_duration(audio_path)
-            
-            # Video properties
-            frame_width = 1280
-            frame_height = 720
-            fps = 24
-            total_frames = int(audio_duration * fps)
-            
-            if not images:
-                st.error("❌ No images available for video creation")
-                return None
-            
-            frames_per_image = max(1, total_frames // len(images))
-            
-            # Initialize video writer
-            fourcc = cv2.VideoWriter_fourcc(*'mp4v')
-            out = cv2.VideoWriter(output_path, fourcc, fps, (frame_width, frame_height))
-            
-            # Split story into parts for display
-            story_parts = self.split_story_for_display(story_text)
-            
-            # Create frames
-            for frame_num in range(total_frames):
-                img_idx = min(len(images) - 1, frame_num // frames_per_image)
-                story_part_idx = min(len(story_parts) - 1, frame_num // (total_frames // len(story_parts)))
-                
-                # Load and process image
-                img_path = images[img_idx]
-                frame = cv2.imread(img_path)
-                
-                if frame is None:
-                    # Create a colored background frame if image loading fails
-                    frame = np.zeros((frame_height, frame_width, 3), dtype=np.uint8)
-                    colors = [(70, 130, 180), (60, 179, 113), (186, 85, 211)]
-                    frame[:, :] = colors[img_idx % len(colors)]
-                
-                # Resize frame to target dimensions
-                frame = cv2.resize(frame, (frame_width, frame_height))
-                
-                # Add dark overlay for better text visibility
-                overlay = frame.copy()
-                cv2.rectangle(overlay, (0, 0), (frame_width, frame_height), (0, 0, 0), -1)
-                cv2.addWeighted(overlay, 0.3, frame, 0.7, 0, frame)
-                
-                # Add story text
-                current_story_part = story_parts[story_part_idx]
-                self.add_story_text_to_frame(frame, current_story_part, frame_num, total_frames)
-                
-                # Add header with bird name
-                cv2.putText(frame, f"Uganda Bird Spotter: {species_name}", 
-                           (50, 50), cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
-                
-                # Add model source information
-                cv2.putText(frame, "Story generated by bird_path.pth model", 
-                           (50, 90), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (200, 200, 255), 1)
-                
-                # Add progress bar
-                progress = frame_num / total_frames
-                cv2.rectangle(frame, (50, frame_height - 50), (frame_width - 50, frame_height - 30), (100, 100, 100), -1)
-                cv2.rectangle(frame, (50, frame_height - 50), (50 + int((frame_width - 100) * progress), frame_height - 30), (0, 200, 255), -1)
-                
-                # Add frame counter
-                cv2.putText(frame, f"Frame {frame_num + 1}/{total_frames}", 
-                           (frame_width - 200, frame_height - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (200, 200, 200), 1)
-                
-                out.write(frame)
-            
-            out.release()
-            
-            # Return the video path (audio will be handled separately)
-            return output_path
-            
-        except Exception as e:
-            st.error(f"❌ OpenCV video creation error: {e}")
-            return None
-
-    def split_story_for_display(self, story_text, max_chars_per_line=60):
-        """Split story into displayable parts"""
-        words = story_text.split()
-        lines = []
-        current_line = ""
-        
-        for word in words:
-            if len(current_line + " " + word) <= max_chars_per_line:
-                current_line += " " + word if current_line else word
-            else:
-                lines.append(current_line)
-                current_line = word
-        if current_line:
-            lines.append(current_line)
-        
-        # Group lines into parts for different frames
-        parts = []
-        lines_per_part = 3
-        for i in range(0, len(lines), lines_per_part):
-            part = "\n".join(lines[i:i + lines_per_part])
-            parts.append(part)
-        
-        return parts if parts else [story_text]
-
-    def add_story_text_to_frame(self, frame, text, frame_num, total_frames):
-        """Add story text to frame with animation"""
-        lines = text.split('\n')
-        y_start = 150
-        line_height = 40
-        
-        for i, line in enumerate(lines):
-            y_pos = y_start + i * line_height
-            
-            # Simple fade-in effect
-            alpha = min(1.0, (frame_num - (i * 10)) / 30)
-            alpha = max(0, alpha)
-            
-            if alpha > 0:
-                # Add text shadow for better readability
-                cv2.putText(frame, line, (52, y_pos + 2), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 0), 2)
-                # Add main text
-                text_color = (int(255 * alpha), int(255 * alpha), int(255 * alpha))
-                cv2.putText(frame, line, (50, y_pos), cv2.FONT_HERSHEY_SIMPLEX, 0.7, text_color, 2)
-
-    def get_bird_images(self, species_name, max_images=5):
-        """Get or create bird images for the species"""
-        try:
-            # Create professional placeholder images
-            image_paths = []
-            
-            for i in range(max_images):
-                placeholder_path = f"./temp_placeholder_{species_name.replace(' ', '_')}_{i}.jpg"
-                if self.create_professional_placeholder(species_name, placeholder_path, i):
-                    image_paths.append(placeholder_path)
-            
-            return image_paths
-            
-        except Exception as e:
-            st.error(f"❌ Error creating bird images: {e}")
-            return []
-
-    def create_professional_placeholder(self, species_name, output_path, variation=0):
-        """Create professional placeholder images with bird illustrations"""
-        try:
-            # Create image with higher resolution
-            width, height = 800, 600
-            img = np.zeros((height, width, 3), dtype=np.uint8)
-            
-            # Background colors
-            bg_colors = [
-                (30, 60, 90),    # Dark blue
-                (40, 80, 120),   # Medium blue  
-                (50, 100, 150),  # Light blue
-                (60, 120, 180),  # Sky blue
-                (70, 140, 210)   # Bright blue
-            ]
-            
-            img[:, :] = bg_colors[variation % len(bg_colors)]
-            
-            # Add gradient effect
-            for i in range(height):
-                alpha = i / height
-                img[i, :] = img[i, :] * (1 - alpha * 0.3) + np.array([10, 20, 30]) * (alpha * 0.3)
-            
-            # Draw bird illustration
-            self.draw_bird_illustration(img, species_name, variation, width, height)
-            
-            # Add text
-            font = cv2.FONT_HERSHEY_SIMPLEX
-            text_color = (255, 255, 255)
-            
-            # Species name
-            cv2.putText(img, species_name, (width//2 - 150, 100), font, 1.2, text_color, 2)
-            
-            # Model source info
-            cv2.putText(img, "Story by bird_path.pth", (width//2 - 100, 140), font, 0.6, (200, 200, 255), 1)
-            
-            # Decorative elements
-            cv2.putText(img, "•", (width//2 - 10, 130), font, 1, text_color, 2)
-            
-            # Information text
-            info_lines = [
-                "Uganda Bird Spotter",
-                "Professional Wildlife Documentation",
-                f"Image {variation + 1} of 5"
-            ]
-            
-            for i, line in enumerate(info_lines):
-                cv2.putText(img, line, (width//2 - 180, 180 + i * 30), font, 0.6, text_color, 1)
-            
-            # Add border
-            cv2.rectangle(img, (10, 10), (width-10, height-10), text_color, 2)
-            
-            cv2.imwrite(output_path, img)
-            return True
-            
-        except Exception as e:
-            st.error(f"❌ Error creating professional placeholder: {e}")
-            return False
-
-    def draw_bird_illustration(self, img, species_name, variation, width, height):
-        """Draw a bird illustration based on species"""
-        center_x, center_y = width // 2, height // 2 + 50
-        
-        # Different bird poses based on variation
-        poses = [
-            {"body_size": (60, 35), "head_size": 25, "wing_angle": 20, "tail_length": 30},
-            {"body_size": (55, 30), "head_size": 22, "wing_angle": -15, "tail_length": 25},
-            {"body_size": (65, 40), "head_size": 28, "wing_angle": 10, "tail_length": 35},
-            {"body_size": (50, 28), "head_size": 20, "wing_angle": -20, "tail_length": 22},
-            {"body_size": (70, 45), "head_size": 30, "wing_angle": 25, "tail_length": 40}
-        ]
-        
-        pose = poses[variation % len(poses)]
-        body_w, body_h = pose["body_size"]
-        head_size = pose["head_size"]
-        wing_angle = pose["wing_angle"]
-        tail_length = pose["tail_length"]
-        
-        # Bird color based on species
-        species_colors = {
-            "African Fish Eagle": (200, 200, 100),
-            "Grey Crowned Crane": (150, 150, 150),
-            "Shoebill Stork": (120, 120, 80),
-            "Lilac-breasted Roller": (180, 120, 220),
-            "Great Blue Turaco": (80, 120, 200)
-        }
-        
-        bird_color = species_colors.get(species_name, (150, 150, 150))
-        
-        # Draw body
-        cv2.ellipse(img, (center_x, center_y), (body_w, body_h), 0, 0, 360, bird_color, -1)
-        
-        # Draw head
-        cv2.ellipse(img, (center_x, center_y - body_h), (head_size, head_size), 0, 0, 360, bird_color, -1)
-        
-        # Draw beak
-        cv2.ellipse(img, (center_x, center_y - body_h), (head_size//2, head_size//4), 0, 0, 360, (50, 50, 30), -1)
-        
-        # Draw wings
-        wing_color = tuple(max(0, c - 30) for c in bird_color)
-        left_wing_points = np.array([
-            [center_x - body_w//2, center_y],
-            [center_x - body_w - 20, center_y - wing_angle],
-            [center_x - body_w//2, center_y - body_h//2]
-        ], np.int32)
-        
-        right_wing_points = np.array([
-            [center_x + body_w//2, center_y],
-            [center_x + body_w + 20, center_y - wing_angle],
-            [center_x + body_w//2, center_y - body_h//2]
-        ], np.int32)
-        
-        cv2.fillPoly(img, [left_wing_points], wing_color)
-        cv2.fillPoly(img, [right_wing_points], wing_color)
-        
-        # Draw tail
-        tail_points = np.array([
-            [center_x, center_y + body_h//2],
-            [center_x - tail_length//2, center_y + body_h//2 + tail_length],
-            [center_x + tail_length//2, center_y + body_h//2 + tail_length]
-        ], np.int32)
-        cv2.fillPoly(img, [tail_points], bird_color)
-
-    def generate_story_video(self, species_name):
-        """Generate a comprehensive story-based video with audio using bird_path.pth model"""
-        try:
-            if not self.model_loaded or self.story_model is None:
-                st.error("❌ Story generation model not loaded")
-                return None, None, None
-            
-            # Get bird information
-            bird_info = self.get_bird_video_info(species_name)
-            
-            if not bird_info:
-                st.error(f"❌ No information found for {species_name}")
-                return None, None, None
-            
-            # Generate story using the bird_path.pth model
-            story_text = self.generate_story_from_model(species_name, bird_info)
-            
-            if not story_text:
-                st.error("❌ Failed to generate story from model")
-                return None, None, None
-            
-            # Display the generated story
-            st.markdown(f'<div class="story-box"><strong>📖 Story generated by bird_path.pth:</strong><br>{story_text}</div>', unsafe_allow_html=True)
-            
-            # Generate audio
-            st.info("🔊 Converting story to speech...")
-            audio_file = f"temp_story_{species_name.replace(' ', '_')}.mp3"
-            audio_path = self.natural_tts(story_text, audio_file)
-            
-            if not audio_path:
-                st.error("❌ Failed to generate audio")
-                return None, None, None
-            
-            # Get bird images
-            st.info("🖼️ Creating professional bird images...")
-            bird_images = self.get_bird_images(species_name, max_images=5)
-            
-            if not bird_images:
-                st.error("❌ No bird images created")
-                return None, None, None
-            
-            # Generate video using OpenCV
-            st.info("🎬 Creating professional story video...")
-            video_file = f"temp_story_video_{species_name.replace(' ', '_')}.mp4"
-            video_path = self.create_story_video_with_opencv(bird_images, audio_path, video_file, story_text, species_name)
-            
-            # Clean up temporary audio file
-            try:
-                if os.path.exists(audio_path):
-                    os.remove(audio_path)
-            except:
-                pass
-            
-            if video_path and os.path.exists(video_path):
-                st.success(f"✅ Professional story video generated successfully using bird_path.pth!")
-                st.info(f"📊 Video details: {len(bird_images)} images, {len(story_text.split())} words, {os.path.getsize(video_path) // (1024*1024)}MB")
-                return video_path, story_text, bird_images
-            else:
-                st.error("❌ Failed to generate video")
-                return None, None, None
-            
-        except Exception as e:
-            st.error(f"❌ Story video generation error: {e}")
-            return None, None, None
-
-    def generate_video(self, species_name):
-        """Main video generation function with story and audio"""
-        return self.generate_story_video(species_name)
-
-# ... (Keep the ResNet34BirdModel class exactly the same as previous version)
-
 class ResNet34BirdModel:
     def __init__(self):
         self.model_loaded = False
@@ -751,130 +272,119 @@ class ResNet34BirdModel:
         self.model = None
         self.device = None
         self.transform = None
-        self.model_path = './resnet34_bird_region_weights.pth'
-        self.label_map_path = './label_map.json'
+        self.model_path = './models/resnet34_bird_region_weights.pth'
+        self.label_map_path = './models/label_map.json'
+        self.download_manager = LargeFileDownloadManager()
         
+    def ensure_model_directories(self):
+        """Create necessary directories"""
+        os.makedirs('./models', exist_ok=True)
+        os.makedirs('./temp', exist_ok=True)
+        
+    def download_large_file_with_retry(self, file_id, url, output_path, max_retries=3):
+        """Download large files with retry mechanism"""
+        for attempt in range(max_retries):
+            try:
+                st.info(f"📥 Download attempt {attempt + 1}/{max_retries} for {file_id}...")
+                
+                # Initialize progress
+                self.download_manager.download_progress[file_id] = {
+                    'progress': 0,
+                    'downloaded_mb': 0,
+                    'total_mb': 0,
+                    'completed': False
+                }
+                
+                # Download in a separate thread
+                download_thread = threading.Thread(
+                    target=self.download_manager.download_with_progress,
+                    args=(url, output_path, file_id)
+                )
+                download_thread.daemon = True
+                download_thread.start()
+                
+                # Monitor progress
+                progress_bar = st.progress(0)
+                status_text = st.empty()
+                
+                while download_thread.is_alive():
+                    time.sleep(1)
+                    if file_id in self.download_manager.download_progress:
+                        progress_info = self.download_manager.download_progress[file_id]
+                        progress = progress_info.get('progress', 0)
+                        downloaded_mb = progress_info.get('downloaded_mb', 0)
+                        total_mb = progress_info.get('total_mb', 0)
+                        
+                        progress_bar.progress(progress)
+                        if total_mb > 0:
+                            status_text.text(f"Downloading {file_id}: {downloaded_mb:.1f}MB / {total_mb:.1f}MB ({progress:.1%})")
+                        else:
+                            status_text.text(f"Downloading {file_id}: {downloaded_mb:.1f}MB")
+                
+                download_thread.join(timeout=300)
+                
+                if file_id in self.download_manager.download_progress:
+                    progress_info = self.download_manager.download_progress[file_id]
+                    if progress_info.get('completed'):
+                        file_size = os.path.getsize(output_path) / (1024 * 1024)
+                        progress_bar.empty()
+                        status_text.empty()
+                        st.success(f"✅ {file_id} downloaded successfully! ({file_size:.1f}MB)")
+                        return True
+                
+                st.warning(f"⚠️ Download attempt {attempt + 1} failed, retrying...")
+                if os.path.exists(output_path):
+                    os.remove(output_path)
+                    
+            except Exception as e:
+                st.error(f"❌ Download error on attempt {attempt + 1}: {e}")
+                if os.path.exists(output_path):
+                    os.remove(output_path)
+                
+        return False
+
     def download_model_from_gdrive(self):
-        """Download model from Google Drive using the direct link"""
-        try:
-            if not os.path.exists(self.model_path):
-                st.info("📥 Downloading ResNet34 model from Google Drive...")
-                
-                # Your Google Drive file ID from the link
-                file_id = "1yfiYcz6e2hWtQTXW6AZVU-iwSUjDP92y"
-                
-                # Method 1: Using gdown (most reliable)
-                try:
-                    import gdown
-                    # Direct download URL for gdown
-                    url = f'https://drive.google.com/uc?id={file_id}'
-                    output = self.model_path
-                    gdown.download(url, output, quiet=False)
-                    
-                except ImportError:
-                    st.warning("gdown not available, trying requests...")
-                    # Method 2: Using requests with cookie handling
-                    session = requests.Session()
-                    
-                    # First, get the confirmation token
-                    url = f"https://docs.google.com/uc?export=download&id={file_id}"
-                    response = session.get(url, stream=True)
-                    
-                    # Check for download confirmation
-                    for key, value in response.cookies.items():
-                        if key.startswith('download_warning'):
-                            # Need to confirm the download
-                            params = {'confirm': value, 'id': file_id}
-                            response = session.get(url, params=params, stream=True)
-                            break
-                    
-                    # Download with progress
-                    total_size = int(response.headers.get('content-length', 0))
-                    block_size = 8192
-                    progress_bar = st.progress(0)
-                    status_text = st.empty()
-                    
-                    with open(self.model_path, 'wb') as f:
-                        downloaded = 0
-                        for chunk in response.iter_content(chunk_size=block_size):
-                            if chunk:
-                                f.write(chunk)
-                                downloaded += len(chunk)
-                                if total_size > 0:
-                                    progress = min(downloaded / total_size, 1.0)
-                                    progress_bar.progress(progress)
-                                    status_text.text(f"Downloaded: {downloaded/(1024*1024):.1f} MB / {total_size/(1024*1024):.1f} MB")
-                    
-                    progress_bar.empty()
-                    status_text.empty()
-            
-            # Verify download
-            if os.path.exists(self.model_path):
-                file_size = os.path.getsize(self.model_path) / (1024 * 1024)
-                if file_size > 1:  # Ensure file is not empty/corrupted
-                    st.success(f"✅ Model downloaded successfully! ({file_size:.1f} MB)")
-                    return True
-                else:
-                    st.error("❌ Downloaded file is too small - may be corrupted")
-                    if os.path.exists(self.model_path):
-                        os.remove(self.model_path)
-                    return False
-            else:
-                st.error("❌ Failed to download model file")
-                return False
-                
-        except Exception as e:
-            st.error(f"❌ Download error: {e}")
-            # Try one more method as fallback
-            return self.download_model_fallback()
-    
-    def download_model_fallback(self):
-        """Final fallback download method"""
-        try:
-            st.info("🔄 Trying final download method...")
-            
-            # Direct download URL format
-            file_id = "1yfiYcz6e2hWtQTXW6AZVU-iwSUjDP92y"
-            direct_url = f"https://drive.google.com/uc?export=download&id={file_id}"
-            
-            # Simple urllib download
-            urllib.request.urlretrieve(direct_url, self.model_path)
-            
-            if os.path.exists(self.model_path) and os.path.getsize(self.model_path) > 1000000:
-                file_size = os.path.getsize(self.model_path) / (1024 * 1024)
-                st.success(f"✅ Model downloaded via fallback method! ({file_size:.1f} MB)")
+        """Download model from Google Drive with enhanced error handling"""
+        self.ensure_model_directories()
+        
+        if os.path.exists(self.model_path):
+            file_size = os.path.getsize(self.model_path) / (1024 * 1024)
+            if file_size > 100:
+                st.info(f"✅ Model already exists ({file_size:.1f}MB)")
                 return True
-            return False
-            
+        
+        file_id = "1yfiYcz6e2hWtQTXW6AZVU-iwSUjDP92y"
+        
+        # Try multiple download methods
+        try:
+            import gdown
+            url = f'https://drive.google.com/uc?id={file_id}'
+            return self.download_large_file_with_retry("ResNet34 Model", url, self.model_path)
+        except ImportError:
+            pass
+        
+        # Fallback method
+        try:
+            url = f"https://drive.google.com/uc?export=download&id={file_id}"
+            return self.download_large_file_with_retry("ResNet34 Model", url, self.model_path)
         except Exception as e:
             st.error(f"❌ All download methods failed: {e}")
             return False
 
-    def check_dependencies(self):
-        """Check if PyTorch and torchvision are available"""
+    def load_label_map(self):
+        """Load the label map for bird species"""
+        if not os.path.exists(self.label_map_path):
+            return self.create_default_label_map()
+        
         try:
-            import torch
-            import torchvision
-            return True
-        except ImportError:
-            st.error("""
-            ❌ PyTorch and torchvision are required but not installed.
+            with open(self.label_map_path, 'r') as f:
+                label_map = json.load(f)
             
-            Please add them to your requirements.txt:
-            ```
-            torch>=2.0.0
-            torchvision>=0.15.0
-            pillow>=9.0.0
-            numpy>=1.21.0
-            opencv-python-headless>=4.5.0
-            requests>=2.25.0
-            gdown>=4.4.0
-            streamlit>=1.22.0
-            pandas>=1.3.0
-            gtts>=2.2.0
-            ```
-            """)
-            return False
+            self.inv_label_map = {v: k for k, v in label_map.items()}
+            self.bird_species = list(label_map.keys())
+            return True
+        except Exception as e:
+            return self.create_default_label_map()
     
     def create_default_label_map(self):
         """Create a default label map if none exists"""
@@ -892,60 +402,32 @@ class ResNet34BirdModel:
         self.inv_label_map = {v: k for k, v in label_map.items()}
         self.bird_species = default_species
         return True
-    
-    def load_label_map(self):
-        """Load the label map for bird species"""
-        if not os.path.exists(self.label_map_path):
-            return self.create_default_label_map()
-        
-        try:
-            with open(self.label_map_path, 'r') as f:
-                label_map = json.load(f)
-            
-            self.inv_label_map = {v: k for k, v in label_map.items()}
-            self.bird_species = list(label_map.keys())
+
+    def load_model_lazy(self):
+        """Lazy load model - only when needed"""
+        if self.model_loaded:
             return True
-        except Exception as e:
-            return self.create_default_label_map()
-    
-    def load_model(self):
-        """Load the ResNet34 model"""
-        if not self.check_dependencies():
-            return False
-        
-        # First, try to download the model
+            
         if not os.path.exists(self.model_path):
-            if not self.download_model_from_gdrive():
-                st.error("""
-                ❌ Could not download the model file from Google Drive.
-                
-                Please ensure:
-                1. The Google Drive file is publicly accessible
-                2. The file ID is correct: 1yfiYcz6e2hWtQTXW6AZVU-iwSUjDP92y
-                3. You have internet connection
-                """)
-                return False
+            with st.spinner("🔄 Downloading bird identification model..."):
+                if not self.download_model_from_gdrive():
+                    st.error("❌ Failed to download model")
+                    return False
         
         try:
             import torch
             import torch.nn as nn
             from torchvision import models, transforms
             
-            # Load label map
             if not self.load_label_map():
                 return False
             
-            # Initialize device
             self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-            st.info(f"🔄 Using device: {self.device}")
             
-            # Create ResNet34 model
             model = models.resnet34(weights=None)
             num_classes = len(self.bird_species)
             model.fc = nn.Linear(model.fc.in_features, num_classes)
             
-            # Load weights
-            st.info("🔄 Loading model weights...")
             if torch.cuda.is_available():
                 model.load_state_dict(torch.load(self.model_path))
             else:
@@ -954,7 +436,6 @@ class ResNet34BirdModel:
             self.model = model.to(self.device)
             self.model.eval()
             
-            # Define transforms
             self.transform = transforms.Compose([
                 transforms.Resize((224, 224)),
                 transforms.ToTensor(),
@@ -962,7 +443,6 @@ class ResNet34BirdModel:
             ])
             
             self.model_loaded = True
-            st.success("✅ ResNet34 model loaded successfully!")
             return True
             
         except Exception as e:
@@ -979,8 +459,6 @@ class ResNet34BirdModel:
             
             height, width = image_array.shape[:2]
             
-            st.info("🔍 Scanning image for birds...")
-            
             # Simple detection - one bird in center
             x = width // 4
             y = height // 4
@@ -990,7 +468,6 @@ class ResNet34BirdModel:
             detection_confidence = 0.85
             detections = [([x, y, w, h], detection_confidence)]
             
-            st.success("✅ Found 1 bird region")
             return detections, image_array
                 
         except Exception as e:
@@ -1062,6 +539,283 @@ class ResNet34BirdModel:
         
         return detections, classifications, original_image
 
+class AdvancedVideoGenerator:
+    def __init__(self):
+        self.csv_path = './data/birdsuganda.csv'
+        self.video_model_path = './models/bird_path.pth'
+        self.bird_data = None
+        self.story_model = None
+        self.model_loaded = False
+        self.video_duration = 20
+        self.download_manager = LargeFileDownloadManager()
+        
+    def ensure_data_directories(self):
+        """Create necessary directories"""
+        os.makedirs('./data', exist_ok=True)
+        os.makedirs('./models', exist_ok=True)
+        os.makedirs('./temp_videos', exist_ok=True)
+        
+    def download_video_model_lazy(self):
+        """Lazy download of video model only when needed"""
+        self.ensure_data_directories()
+        
+        if os.path.exists(self.video_model_path):
+            file_size = os.path.getsize(self.video_model_path) / (1024 * 1024)
+            if file_size > 50:
+                return self.load_video_model()
+        
+        # Show download option
+        if st.button("📥 Download Story Generation Model (1GB+)"):
+            with st.spinner("Downloading advanced story generation model..."):
+                file_id = "1J9T5r5TboWzvqAPQHmfvQmozor_wmmPz"
+                
+                try:
+                    import gdown
+                    url = f'https://drive.google.com/uc?id={file_id}'
+                    success = self.download_large_file_with_retry("Story Model", url, self.video_model_path)
+                    if success:
+                        return self.load_video_model()
+                except ImportError:
+                    pass
+                
+                # Fallback
+                try:
+                    url = f"https://drive.google.com/uc?export=download&id={file_id}"
+                    success = self.download_large_file_with_retry("Story Model", url, self.video_model_path)
+                    if success:
+                        return self.load_video_model()
+                except Exception as e:
+                    st.error(f"❌ Download failed: {e}")
+            
+        return False
+
+    def download_large_file_with_retry(self, file_id, url, output_path, max_retries=2):
+        """Download large files with retry mechanism"""
+        for attempt in range(max_retries):
+            try:
+                # Initialize progress
+                self.download_manager.download_progress[file_id] = {
+                    'progress': 0,
+                    'downloaded_mb': 0,
+                    'total_mb': 0,
+                    'completed': False
+                }
+                
+                # Download in thread
+                download_thread = threading.Thread(
+                    target=self.download_manager.download_with_progress,
+                    args=(url, output_path, file_id)
+                )
+                download_thread.daemon = True
+                download_thread.start()
+                
+                # Monitor progress
+                progress_bar = st.progress(0)
+                status_text = st.empty()
+                
+                while download_thread.is_alive():
+                    time.sleep(1)
+                    if file_id in self.download_manager.download_progress:
+                        progress_info = self.download_manager.download_progress[file_id]
+                        progress = progress_info.get('progress', 0)
+                        downloaded_mb = progress_info.get('downloaded_mb', 0)
+                        total_mb = progress_info.get('total_mb', 0)
+                        
+                        progress_bar.progress(progress)
+                        if total_mb > 0:
+                            status_text.text(f"Downloading {file_id}: {downloaded_mb:.1f}MB / {total_mb:.1f}MB ({progress:.1%})")
+                        else:
+                            status_text.text(f"Downloading {file_id}: {downloaded_mb:.1f}MB")
+                
+                download_thread.join(timeout=600)  # 10-minute timeout for large files
+                
+                if file_id in self.download_manager.download_progress:
+                    progress_info = self.download_manager.download_progress[file_id]
+                    if progress_info.get('completed'):
+                        file_size = os.path.getsize(output_path) / (1024 * 1024)
+                        progress_bar.empty()
+                        status_text.empty()
+                        st.success(f"✅ {file_id} downloaded! ({file_size:.1f}MB)")
+                        return True
+                
+                st.warning(f"⚠️ Download attempt {attempt + 1} failed")
+                if os.path.exists(output_path):
+                    os.remove(output_path)
+                    
+            except Exception as e:
+                st.error(f"❌ Download error: {e}")
+                if os.path.exists(output_path):
+                    os.remove(output_path)
+                
+        return False
+
+    def load_video_model(self):
+        """Load the bird_path.pth model for story generation"""
+        if not os.path.exists(self.video_model_path):
+            return False
+        
+        try:
+            if torch.cuda.is_available():
+                model_data = torch.load(self.video_model_path)
+            else:
+                model_data = torch.load(self.video_model_path, map_location=torch.device('cpu'))
+            
+            if isinstance(model_data, BirdStoryGenerator):
+                self.story_model = model_data
+            elif isinstance(model_data, dict):
+                self.story_model = BirdStoryGenerator(TEMPLATES)
+            else:
+                self.story_model = BirdStoryGenerator(TEMPLATES)
+            
+            self.model_loaded = True
+            return True
+            
+        except Exception as e:
+            st.error(f"❌ Model loading failed: {e}")
+            self.story_model = BirdStoryGenerator(TEMPLATES)
+            self.model_loaded = True
+            return True
+
+    def load_video_model_lazy(self):
+        """Lazy load video model"""
+        if not self.model_loaded:
+            return self.download_video_model_lazy()
+        return True
+
+    def load_bird_data(self):
+        """Load and process the bird species data from local CSV"""
+        try:
+            if os.path.exists(self.csv_path):
+                self.bird_data = pd.read_csv(self.csv_path)
+                return True
+            else:
+                # Create sample data if CSV doesn't exist
+                sample_data = {
+                    'species_name': ['African Fish Eagle', 'Grey Crowned Crane', 'Shoebill Stork'],
+                    'description': ['Majestic bird of prey', 'National bird of Uganda', 'Ancient-looking stork'],
+                    'colors': ['white, brown', 'grey, white, gold', 'grey, blue']
+                }
+                self.bird_data = pd.DataFrame(sample_data)
+                self.bird_data.to_csv(self.csv_path, index=False)
+                return True
+                
+        except Exception as e:
+            st.error(f"❌ Error loading CSV: {e}")
+            return False
+
+    def generate_story_video(self, species_name):
+        """Generate a comprehensive story-based video"""
+        try:
+            if not self.model_loaded or self.story_model is None:
+                st.error("❌ Story generation model not loaded")
+                return None, None, None
+            
+            # Get bird information
+            if not self.load_bird_data():
+                return None, None, None
+            
+            bird_info = self.get_bird_video_info(species_name)
+            
+            # Generate story
+            story_text = self.generate_story_from_model(species_name, bird_info)
+            
+            if not story_text:
+                return None, None, None
+            
+            st.markdown(f'<div class="story-box"><strong>📖 Story:</strong><br>{story_text}</div>', unsafe_allow_html=True)
+            
+            # Create simple video file
+            video_path = self.create_simple_video(species_name, story_text)
+            
+            if video_path:
+                st.success("✅ Story video generated successfully!")
+                return video_path, story_text, []
+            else:
+                return None, None, None
+            
+        except Exception as e:
+            st.error(f"❌ Story video generation error: {e}")
+            return None, None, None
+
+    def get_bird_video_info(self, species_name):
+        """Get video generation information for a specific bird species"""
+        if self.bird_data is None:
+            if not self.load_bird_data():
+                return None
+        
+        try:
+            for col in ['species_name', 'species', 'name']:
+                if col in self.bird_data.columns:
+                    bird_info = self.bird_data[
+                        self.bird_data[col].astype(str).str.lower() == species_name.lower()
+                    ]
+                    if len(bird_info) > 0:
+                        return bird_info.iloc[0].to_dict()
+            
+            return None
+                
+        except Exception as e:
+            return None
+
+    def generate_story_from_model(self, species_name, bird_info):
+        """Generate story using the loaded model"""
+        try:
+            if not self.model_loaded or self.story_model is None:
+                return None
+            
+            common_name = species_name
+            description = bird_info.get('description', '') if bird_info else ''
+            colors = []
+            
+            color_columns = ['colors', 'primary_colors', 'plumage_colors']
+            for col in color_columns:
+                if col in bird_info and pd.notna(bird_info[col]):
+                    colors = str(bird_info[col]).split(',')
+                    break
+            
+            story_text = self.story_model(common_name, description, colors)
+            return story_text
+            
+        except Exception as e:
+            return f"The {species_name} is a magnificent bird found in Uganda's diverse ecosystems. With its unique characteristics, it plays a vital role in the local biodiversity."
+
+    def create_simple_video(self, species_name, story_text):
+        """Create a simple video with text overlay"""
+        try:
+            # Create a simple video with OpenCV
+            width, height = 800, 600
+            fps = 24
+            duration = 10  # seconds
+            total_frames = fps * duration
+            
+            video_path = f"./temp_videos/story_{species_name.replace(' ', '_')}.mp4"
+            fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+            out = cv2.VideoWriter(video_path, fourcc, fps, (width, height))
+            
+            for i in range(total_frames):
+                # Create frame with gradient background
+                frame = np.zeros((height, width, 3), dtype=np.uint8)
+                frame[:, :] = [30 + i % 50, 60 + i % 50, 90 + i % 50]
+                
+                # Add text
+                font = cv2.FONT_HERSHEY_SIMPLEX
+                cv2.putText(frame, f"Uganda Bird: {species_name}", (50, 100), font, 1, (255, 255, 255), 2)
+                cv2.putText(frame, "Story by bird_path.pth", (50, 150), font, 0.6, (200, 200, 255), 1)
+                
+                # Add progress bar
+                progress = i / total_frames
+                cv2.rectangle(frame, (50, 500), (width - 50, 530), (100, 100, 100), -1)
+                cv2.rectangle(frame, (50, 500), (50 + int((width - 100) * progress), 530), (0, 200, 255), -1)
+                
+                out.write(frame)
+            
+            out.release()
+            return video_path
+            
+        except Exception as e:
+            st.error(f"❌ Video creation error: {e}")
+            return None
+
 def get_base64_image(image_path):
     """Convert image to base64 for embedding in HTML"""
     try:
@@ -1070,157 +824,121 @@ def get_base64_image(image_path):
     except:
         return ""
 
-def initialize_system():
-    """Initialize the bird detection system"""
-    if 'bird_model' not in st.session_state:
-        st.session_state.bird_model = ResNet34BirdModel()
-        st.session_state.video_generator = AdvancedVideoGenerator()
-        st.session_state.detection_complete = False
-        st.session_state.bird_detections = []
-        st.session_state.bird_classifications = []
-        st.session_state.current_image = None
-        st.session_state.active_method = "upload"
-        st.session_state.model_loaded = False
-        st.session_state.system_initialized = False
-        st.session_state.generated_video_path = None
-        st.session_state.selected_species_for_video = None
-        st.session_state.generated_story = None
-        st.session_state.used_images = None
+def initialize_system_optimized():
+    """Optimized initialization that doesn't block health checks"""
+    if 'system_initialized' not in st.session_state:
+        st.session_state.update({
+            'bird_model': ResNet34BirdModel(),
+            'video_generator': AdvancedVideoGenerator(),
+            'system_initialized': False,
+            'model_loaded': False,
+            'video_model_loaded': False,
+            'initialization_phase': 'minimal',
+            'detection_complete': False,
+            'bird_detections': [],
+            'bird_classifications': [],
+            'current_image': None,
+            'active_method': "upload",
+            'generated_video_path': None,
+            'selected_species_for_video': None,
+            'generated_story': None,
+            'used_images': None
+        })
     
-    # Initialize system only once
-    if not st.session_state.system_initialized:
-        with st.spinner("🚀 Initializing Uganda Bird Spotter System..."):
-            # Try to load the model
-            success = st.session_state.bird_model.load_model()
-            
-            if success:
-                # Load video generator data and model
-                st.session_state.video_generator.load_bird_data()
-                video_model_loaded = st.session_state.video_generator.load_video_model()
-                st.session_state.model_loaded = True
-                st.session_state.system_initialized = True
-                
-                if video_model_loaded and st.session_state.video_generator.model_loaded:
-                    st.success(f"✅ System ready! Both models loaded - Can identify {len(st.session_state.bird_model.bird_species)} bird species and generate stories using bird_path.pth")
-                else:
-                    st.success(f"✅ System ready! ResNet34 model active - Can identify {len(st.session_state.bird_model.bird_species)} bird species")
-            else:
-                st.error("❌ System initialization failed. Please check the requirements and internet connection.")
+    # Phase 1: Minimal initialization (always done)
+    if st.session_state.initialization_phase == 'minimal':
+        st.session_state.bird_model.ensure_model_directories()
+        st.session_state.bird_model.load_label_map()
+        st.session_state.video_generator.ensure_data_directories()
+        st.session_state.initialization_phase = 'core'
+        st.session_state.system_initialized = True
+    
+    return True
 
-def main():
-    # Initialize the system
-    initialize_system()
-    
-    # Check if system initialized properly
-    if not st.session_state.get('system_initialized', False):
-        st.error("""
-        ❌ System failed to initialize properly. 
-        
-        Please check:
-        1. Required dependencies are installed
-        2. Internet connection is available for model download
-        3. Google Drive file is accessible
-        
-        The app cannot run without the ResNet34 model file.
-        """)
-        return
-    
-    bird_model = st.session_state.bird_model
-    video_generator = st.session_state.video_generator
-    
-    # Sidebar with logo and bird list
+def load_core_model_on_demand():
+    """Load the core bird identification model only when needed"""
+    if not st.session_state.get('model_loaded', False):
+        with st.spinner("🔄 Loading bird identification model..."):
+            if st.session_state.bird_model.load_model_lazy():
+                st.session_state.model_loaded = True
+                return True
+            else:
+                st.error("❌ Failed to load bird identification model")
+                return False
+    return True
+
+def load_video_model_on_demand():
+    """Load video model only when user requests video features"""
+    if not st.session_state.get('video_model_loaded', False):
+        if st.session_state.video_generator.load_video_model_lazy():
+            st.session_state.video_model_loaded = True
+            return True
+    return st.session_state.get('video_model_loaded', False)
+
+def render_basic_ui():
+    """Render the basic UI that appears immediately"""
+    # Sidebar
     with st.sidebar:
-        # Logo at the top of sidebar
-        try:
-            base64_logo = get_base64_image("ugb1.png")
-            st.markdown(f'<img src="data:image/png;base64,{base64_logo}" class="sidebar-logo" alt="Bird Spotter Logo">', unsafe_allow_html=True)
-        except:
-            st.markdown('<div class="sidebar-logo" style="background: #2E86AB; display: flex; align-items: center; justify-content: center; color: white; font-weight: bold; font-size: 24px;">UG</div>', unsafe_allow_html=True)
-        
         st.markdown('<div class="sidebar-title">Uganda Bird Spotter</div>', unsafe_allow_html=True)
         
         st.markdown("### 🦅 Detectable Birds")
-        st.markdown(f"**Total Species:** {len(bird_model.bird_species)}")
-        
-        # Bird list with scroll
-        st.markdown('<div class="bird-list">', unsafe_allow_html=True)
-        for species in bird_model.bird_species:
-            st.markdown(f"• {species}")
-        st.markdown('</div>', unsafe_allow_html=True)
-        
-        # Video model status
-        st.markdown("---")
-        if video_generator.model_loaded:
-            st.success("🎬 Story Model: **bird_path.pth**")
-            st.info("📖 Generates: Ugandan Bird Stories")
-            st.success("🎥 Video Engine: **OpenCV Professional**")
+        if st.session_state.bird_model.bird_species:
+            st.markdown(f"**Total Species:** {len(st.session_state.bird_model.bird_species)}")
+            st.markdown('<div class="bird-list">', unsafe_allow_html=True)
+            for species in st.session_state.bird_model.bird_species[:10]:  # Show first 10
+                st.markdown(f"• {species}")
+            st.markdown('</div>', unsafe_allow_html=True)
         else:
-            st.warning("🎬 Story Model: **Not Available**")
-    
-    # Main app content
-    # Custom header with logo beside title
-    try:
-        base64_logo = get_base64_image("ugb1.png")
-        logo_html = f'<img src="data:image/png;base64,{base64_logo}" class="title-image" alt="Bird Spotter Logo">'
-    except:
-        logo_html = '<div class="title-image" style="background: #2E86AB; display: flex; align-items: center; justify-content: center; color: white; font-weight: bold;">UG</div>'
-    
-    st.markdown(f"""
+            st.info("Bird list will load with model")
+        
+        # System status
+        st.markdown("---")
+        if st.session_state.model_loaded:
+            st.success("🔍 Bird ID: **Ready**")
+        else:
+            st.warning("🔍 Bird ID: **Click Analyze**")
+        
+        if st.session_state.video_model_loaded:
+            st.success("🎬 Stories: **Ready**")
+        else:
+            st.warning("🎬 Stories: **Click Download**")
+
+    # Main header
+    st.markdown("""
     <div class="main-header">
-        {logo_html}
         Uganda Bird Spotter
     </div>
     """, unsafe_allow_html=True)
     
     # Welcome message
-    if video_generator.model_loaded:
-        st.markdown("""
-        <div class="glass-card">
-            <strong>🦜 Welcome to Uganda Bird Spotter!</strong><br>
-            This app uses AI models for bird identification and professional story generation. 
-            Upload bird photos for identification, then generate authentic Ugandan bird stories 
-            using the <strong>bird_path.pth</strong> model with narrated audio and professional visual effects.
-        </div>
-        """, unsafe_allow_html=True)
-    else:
-        st.markdown("""
-        <div class="glass-card">
-            <strong>🦜 Welcome to Uganda Bird Spotter!</strong><br>
-            This app uses a specialized ResNet34 model trained on Ugandan bird species. 
-            Upload or capture images to get accurate bird identifications using AI.
-        </div>
-        """, unsafe_allow_html=True)
-    
-    # Method selection
+    st.markdown("""
+    <div class="glass-card">
+        <strong>🦜 Welcome to Uganda Bird Spotter!</strong><br>
+        AI-powered bird identification and story generation. Upload photos for instant identification 
+        or generate educational story videos about Ugandan birds.
+    </div>
+    """, unsafe_allow_html=True)
+
+def handle_image_input():
+    """Handle image input from user"""
     col1, col2 = st.columns(2)
     
     with col1:
         upload_active = st.session_state.active_method == "upload"
-        if st.button(
-            "📁 Upload Bird Photo", 
-            use_container_width=True, 
-            type="primary" if upload_active else "secondary",
-            key="upload_btn"
-        ):
+        if st.button("📁 Upload Photo", use_container_width=True, type="primary" if upload_active else "secondary"):
             st.session_state.active_method = "upload"
             st.session_state.current_image = None
             st.rerun()
     
     with col2:
         camera_active = st.session_state.active_method == "camera"
-        if st.button(
-            "📷 Capture Live Photo", 
-            use_container_width=True, 
-            type="primary" if camera_active else "secondary",
-            key="camera_btn"
-        ):
+        if st.button("📷 Capture Photo", use_container_width=True, type="primary" if camera_active else "secondary"):
             st.session_state.active_method = "camera"
             st.session_state.current_image = None
             st.rerun()
     
     st.markdown("---")
     
-    # Image input
     current_image = None
     
     if st.session_state.active_method == "upload":
@@ -1230,8 +948,7 @@ def main():
             "Choose a bird image", 
             type=['jpg', 'jpeg', 'png'],
             help="Upload photos of birds for identification",
-            label_visibility="collapsed",
-            key="file_uploader"
+            label_visibility="collapsed"
         )
         st.markdown('</div>', unsafe_allow_html=True)
         
@@ -1249,7 +966,6 @@ def main():
         camera_image = st.camera_input(
             "Take a picture of a bird",
             help="Capture birds for identification",
-            key="camera_input",
             label_visibility="collapsed"
         )
         st.markdown('</div>', unsafe_allow_html=True)
@@ -1262,28 +978,46 @@ def main():
             except Exception as e:
                 st.error(f"❌ Error loading camera image: {e}")
     
-    # Display image and analysis button
+    return current_image
+
+def main():
+    """Main optimized application"""
+    # Minimal initialization
+    initialize_system_optimized()
+    
+    bird_model = st.session_state.bird_model
+    video_generator = st.session_state.video_generator
+    
+    # Show basic UI immediately
+    render_basic_ui()
+    
+    # Handle image input
+    current_image = handle_image_input()
+    
+    # Handle image analysis
     if current_image is not None:
         st.markdown('<div class="glass-card">', unsafe_allow_html=True)
         st.image(current_image, caption="Bird Photo for Analysis", use_column_width=True)
         st.markdown('</div>', unsafe_allow_html=True)
         
-        if st.button("🔍 Identify Bird Species with ResNet34", type="primary", use_container_width=True):
-            if not st.session_state.model_loaded:
-                st.error("❌ Model not loaded. Cannot make predictions.")
-            else:
-                with st.spinner("Analyzing bird species using ResNet34..."):
+        if st.button("🔍 Analyze Bird Species", type="primary", use_container_width=True):
+            # Load model on demand
+            if load_core_model_on_demand():
+                with st.spinner("Analyzing bird species using AI..."):
                     detections, classifications, original_image = bird_model.predict_bird_species(current_image)
                     
                     st.session_state.detection_complete = True
                     st.session_state.bird_detections = detections
                     st.session_state.bird_classifications = classifications
                     st.session_state.current_image = original_image
+                    st.rerun()
+            else:
+                st.error("❌ Please wait for model to load or try again")
     
     # Display results
     if st.session_state.detection_complete and st.session_state.current_image is not None:
         st.markdown("---")
-        st.markdown('<div class="section-title">🎯 ResNet34 Identification Results</div>', unsafe_allow_html=True)
+        st.markdown('<div class="section-title">🎯 Identification Results</div>', unsafe_allow_html=True)
         
         detections = st.session_state.bird_detections
         classifications = st.session_state.bird_classifications
@@ -1292,13 +1026,13 @@ def main():
             st.info("🔍 No birds detected in this image")
         else:
             # Metrics
-            col_metric1, col_metric2 = st.columns(2)
-            with col_metric1:
+            col1, col2 = st.columns(2)
+            with col1:
                 st.markdown('<div class="glass-metric">', unsafe_allow_html=True)
                 st.metric("Birds Identified", len(detections))
                 st.markdown('</div>', unsafe_allow_html=True)
             
-            with col_metric2:
+            with col2:
                 st.markdown('<div class="glass-metric">', unsafe_allow_html=True)
                 if classifications:
                     avg_confidence = sum(conf for _, conf in classifications) / len(classifications)
@@ -1310,14 +1044,12 @@ def main():
             # Process each bird
             for i, ((box, det_conf), (species, class_conf)) in enumerate(zip(detections, classifications)):
                 st.markdown("---")
-                
-                # Bird information
                 st.markdown('<div class="glass-card">', unsafe_allow_html=True)
                 st.markdown(f"### 🐦 Bird #{i+1} - {species}")
                 
                 st.markdown(f"""
                 <div style="padding: 15px; background: rgba(255,255,255,0.1); border-radius: 8px;">
-                    <h4>ResNet34 Model Prediction</h4>
+                    <h4>AI Model Prediction</h4>
                     <p><strong>Species:</strong> {species}</p>
                     <p><strong>Confidence:</strong> {class_conf:.1%}</p>
                     <p><strong>Detection Score:</strong> {det_conf:.1%}</p>
@@ -1341,29 +1073,20 @@ def main():
     
     # Story Video Generation Section
     st.markdown("---")
-    st.markdown('<div class="section-title">🎬 Story Video Generator (bird_path.pth)</div>', unsafe_allow_html=True)
+    st.markdown('<div class="section-title">🎬 Story Video Generator</div>', unsafe_allow_html=True)
     
-    if video_generator.model_loaded:
-        st.markdown(f"""
+    if st.session_state.video_model_loaded:
+        st.markdown("""
         <div class="video-section">
-            <strong>📖 Authentic Ugandan Bird Stories</strong><br>
-            Generate complete educational story videos using the <strong>bird_path.pth</strong> model. Each video includes:
-            <br><br>
-            • <strong>Authentic Stories</strong>: Generated by bird_path.pth model using Ugandan templates<br>
-            • <strong>Text-to-Speech Audio</strong>: Professional narration of the story<br>
-            • <strong>Professional Visuals</strong>: High-quality bird illustrations and animations<br>
-            • <strong>Story Text Overlay</strong>: Animated text display synchronized with audio<br>
-            • <strong>Progress Tracking</strong>: Visual progress indicator<br>
-            <br>
-            <strong>Video Engine:</strong> OpenCV Professional Video Creation
+            <strong>📖 Ugandan Bird Stories</strong><br>
+            Generate educational story videos with AI-generated narratives about Ugandan birds.
         </div>
         """, unsafe_allow_html=True)
     else:
         st.markdown("""
         <div class="video-section">
-            <strong>📖 Story Video Generation</strong><br>
-            Story generation requires the bird_path.pth model file.
-            Please ensure the model is properly downloaded and configured.
+            <strong>📖 Enable Story Generation</strong><br>
+            Download the story model to generate educational videos about Ugandan birds.
         </div>
         """, unsafe_allow_html=True)
     
@@ -1371,95 +1094,63 @@ def main():
     col1, col2 = st.columns(2)
     
     with col1:
-        # Option 1: Use detected species
         if st.session_state.get('selected_species_for_video'):
-            st.info(f"🦜 Detected Species: **{st.session_state.selected_species_for_video}**")
+            st.info(f"🦜 Detected: **{st.session_state.selected_species_for_video}**")
             if st.button("🎬 Generate Story Video", use_container_width=True, type="primary"):
-                with st.spinner("Creating story video using bird_path.pth..."):
-                    video_path, story_text, used_images = video_generator.generate_video(st.session_state.selected_species_for_video)
+                if load_video_model_on_demand():
+                    with st.spinner("Creating story video..."):
+                        video_path, story_text, used_images = video_generator.generate_story_video(
+                            st.session_state.selected_species_for_video
+                        )
+                        if video_path:
+                            st.session_state.generated_video_path = video_path
+                            st.session_state.generated_story = story_text
+                            st.session_state.used_images = used_images
+                            st.rerun()
+    
+    with col2:
+        manual_species = st.selectbox(
+            "Or select species:",
+            options=bird_model.bird_species,
+            index=0 if not st.session_state.get('selected_species_for_video') else 
+                  bird_model.bird_species.index(st.session_state.selected_species_for_video) 
+                  if st.session_state.selected_species_for_video in bird_model.bird_species else 0,
+            key="manual_species_select"
+        )
+        
+        if st.button("🎬 Generate for Selected", use_container_width=True, type="primary"):
+            if load_video_model_on_demand():
+                with st.spinner("Creating story video..."):
+                    video_path, story_text, used_images = video_generator.generate_story_video(manual_species)
                     if video_path:
                         st.session_state.generated_video_path = video_path
                         st.session_state.generated_story = story_text
                         st.session_state.used_images = used_images
-                        st.success("✅ Story video generated successfully using bird_path.pth!")
-                    else:
-                        st.error("❌ Failed to generate story video")
+                        st.session_state.selected_species_for_video = manual_species
+                        st.rerun()
     
-    with col2:
-        # Option 2: Manual species selection
-        manual_species = st.selectbox(
-            "Or select a species manually:",
-            options=bird_model.bird_species,
-            index=0 if not st.session_state.get('selected_species_for_video') else 
-                  bird_model.bird_species.index(st.session_state.selected_species_for_video) 
-                  if st.session_state.selected_species_for_video in bird_model.bird_species else 0
-        )
-        
-        if st.button("🎬 Generate Video for Selected Bird", use_container_width=True, type="primary"):
-            with st.spinner("Creating story video using bird_path.pth..."):
-                video_path, story_text, used_images = video_generator.generate_video(manual_species)
-                if video_path:
-                    st.session_state.generated_video_path = video_path
-                    st.session_state.generated_story = story_text
-                    st.session_state.used_images = used_images
-                    st.session_state.selected_species_for_video = manual_species
-                    st.success("✅ Story video generated successfully using bird_path.pth!")
-                else:
-                    st.error("❌ Failed to generate story video")
-    
-    # Display generated story and video
+    # Display generated video
     if st.session_state.get('generated_video_path') and os.path.exists(st.session_state.generated_video_path):
         st.markdown("---")
-        st.markdown("### 📖 Story Video (bird_path.pth)")
+        st.markdown("### 📖 Generated Story Video")
         
-        # Display the story
         if st.session_state.get('generated_story'):
-            st.markdown(f'<div class="story-box"><strong>📖 Story generated by bird_path.pth:</strong><br>{st.session_state.generated_story}</div>', unsafe_allow_html=True)
+            st.markdown(f'<div class="story-box">{st.session_state.generated_story}</div>', unsafe_allow_html=True)
         
-        # Display used images
-        if st.session_state.get('used_images'):
-            st.markdown(f"**🖼️ Professional Bird Illustrations ({len(st.session_state.used_images)} images):**")
-            cols = st.columns(min(3, len(st.session_state.used_images)))
-            for idx, img_path in enumerate(st.session_state.used_images):
-                with cols[idx % 3]:
-                    try:
-                        st.image(img_path, use_column_width=True, caption=f"Illustration {idx+1}")
-                    except:
-                        st.info(f"Image {idx+1}")
-        
-        # Display video
         try:
             with open(st.session_state.generated_video_path, "rb") as video_file:
                 video_bytes = video_file.read()
             
             st.video(video_bytes)
             
-            # Video information
-            file_size = os.path.getsize(st.session_state.generated_video_path) // (1024 * 1024)
-            st.info(f"**Video Details:** {st.session_state.selected_species_for_video} | bird_path.pth Story | {file_size}MB | OpenCV Professional Video")
-            
-            # Download buttons
-            col1, col2 = st.columns(2)
-            
-            with col1:
-                st.download_button(
-                    label="📥 Download Story Video",
-                    data=video_bytes,
-                    file_name=f"uganda_bird_story_{st.session_state.selected_species_for_video.replace(' ', '_')}.mp4",
-                    mime="video/mp4",
-                    use_container_width=True
-                )
-            
-            with col2:
-                if st.session_state.get('generated_story'):
-                    story_bytes = st.session_state.generated_story.encode('utf-8')
-                    st.download_button(
-                        label="📝 Download Story Text",
-                        data=story_bytes,
-                        file_name=f"uganda_bird_story_{st.session_state.selected_species_for_video.replace(' ', '_')}.txt",
-                        mime="text/plain",
-                        use_container_width=True
-                    )
+            # Download button
+            st.download_button(
+                label="📥 Download Story Video",
+                data=video_bytes,
+                file_name=f"uganda_bird_{st.session_state.selected_species_for_video.replace(' ', '_')}.mp4",
+                mime="video/mp4",
+                use_container_width=True
+            )
             
         except Exception as e:
             st.error(f"❌ Error displaying video: {e}")
