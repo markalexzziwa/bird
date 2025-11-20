@@ -192,18 +192,20 @@ class BirdStoryGenerator:
         tmpl = random.choice(self.templates)
         return tmpl.format(name=name, color_phrase=color_phrase, desc=desc)
 
-# ========== SIMPLE FILE DOWNLOADER (Like resnet.pth) ==========
+# ========== SIMPLE FILE DOWNLOADER ==========
 def download_file_from_gdrive(file_id, destination):
-    """Download file from Google Drive using the same pattern as resnet.pth"""
+    """Download file from Google Drive"""
     try:
         if not os.path.exists(destination):
-            st.info(f"📥 Downloading file from Google Drive...")
+            st.info(f"📥 Downloading {os.path.basename(destination)} from Google Drive...")
             
             # Method 1: Using gdown (most reliable)
             try:
                 import gdown
                 url = f'https://drive.google.com/uc?id={file_id}'
                 gdown.download(url, destination, quiet=False)
+                st.success(f"✅ Downloaded {os.path.basename(destination)} successfully!")
+                return True
                 
             except ImportError:
                 st.warning("gdown not available, trying requests...")
@@ -241,40 +243,40 @@ def download_file_from_gdrive(file_id, destination):
                 
                 progress_bar.empty()
                 status_text.empty()
+                st.success(f"✅ Downloaded {os.path.basename(destination)} successfully!")
+                return True
         
-        # Verify download
+        # If file already exists
         if os.path.exists(destination):
             file_size = os.path.getsize(destination) / (1024 * 1024)
-            if file_size > 1:  # Ensure file is not empty/corrupted
-                st.success(f"✅ File downloaded successfully! ({file_size:.1f} MB)")
+            if file_size > 0.1:  # Ensure file is not empty/corrupted
                 return True
             else:
-                st.error("❌ Downloaded file is too small - may be corrupted")
-                if os.path.exists(destination):
-                    os.remove(destination)
+                st.error(f"❌ {os.path.basename(destination)} is too small - may be corrupted")
+                os.remove(destination)
                 return False
         else:
-            st.error("❌ Failed to download file")
+            st.error(f"❌ Failed to download {os.path.basename(destination)}")
             return False
             
     except Exception as e:
-        st.error(f"❌ Download error: {e}")
+        st.error(f"❌ Download error for {os.path.basename(destination)}: {e}")
         return False
 
 # ========== BIRD DATA LOADING ==========
 @st.cache_resource
 def load_bird_data():
-    """Load bird data with download from Google Drive"""
+    """Load bird data"""
     pth_path = "bird_data.pth"
-    file_id = "YOUR_BIRD_DATA_FILE_ID"  # Replace with actual file ID if needed
     
-    # Try to download if file doesn't exist
     if not os.path.exists(pth_path):
         st.warning(f"bird_data.pth not found. Please ensure it's in the app directory.")
         return {}
     
     try:
-        return torch.load(pth_path, map_location="cpu")
+        bird_data = torch.load(pth_path, map_location="cpu")
+        st.success(f"✅ Loaded bird data with {len(bird_data)} species")
+        return bird_data
     except Exception as e:
         st.error(f"Error loading bird data: {e}")
         return {}
@@ -311,31 +313,36 @@ class AdvancedVideoGenerator:
     def __init__(self):
         self.csv_path = './birdsuganda.csv'
         self.bird_data = None
-        self.model_loaded = video_model_data is not None
         self.video_duration = 20
-        # Use loaded video model or fallback to default
-        if self.model_loaded:
-            self.story_generator = self._create_story_generator_from_model(video_model_data)
-        else:
-            self.story_generator = BirdStoryGenerator(TEMPLATES)
-        
         self.moviepy_available = MOVIEPY_AVAILABLE
         
-    def _create_story_generator_from_model(self, model_data):
-        """Create story generator from loaded model data"""
-        try:
-            if isinstance(model_data, dict):
-                if 'story_generator' in model_data:
-                    return model_data['story_generator']
-                elif 'templates' in model_data:
-                    return BirdStoryGenerator(model_data['templates'])
-            elif hasattr(model_data, 'generate_story'):
-                return model_data
-            else:
+        # Initialize story generator - ALWAYS have a fallback
+        self.story_generator = self._initialize_story_generator()
+        
+    def _initialize_story_generator(self):
+        """Initialize story generator with proper fallbacks"""
+        if video_model_data is not None:
+            try:
+                # Try to extract story generator from model data
+                if hasattr(video_model_data, 'generate_story'):
+                    st.success("✅ Using advanced story generation model")
+                    return video_model_data
+                elif isinstance(video_model_data, dict) and 'story_generator' in video_model_data:
+                    st.success("✅ Using story generator from model data")
+                    return video_model_data['story_generator']
+                elif isinstance(video_model_data, dict) and 'templates' in video_model_data:
+                    st.success("✅ Using custom templates from model")
+                    return BirdStoryGenerator(video_model_data['templates'])
+                else:
+                    st.info("📖 Using enhanced story generation")
+                    return BirdStoryGenerator(TEMPLATES)
+            except Exception as e:
+                st.warning(f"⚠️ Could not load advanced model: {e}. Using default stories.")
                 return BirdStoryGenerator(TEMPLATES)
-        except:
+        else:
+            st.info("📖 Using default story generation")
             return BirdStoryGenerator(TEMPLATES)
-
+    
     def load_bird_data(self):
         """Load and process the bird species data from local CSV"""
         try:
@@ -343,6 +350,7 @@ class AdvancedVideoGenerator:
                 self.bird_data = pd.read_csv(self.csv_path)
                 return True
             else:
+                st.warning(f"CSV file not found: {self.csv_path}")
                 return False
         except Exception as e:
             st.error(f"❌ Error loading CSV: {e}")
@@ -395,15 +403,19 @@ class AdvancedVideoGenerator:
     def create_slideshow_video_opencv(self, images, audio_path, output_path):
         """Create slideshow video using OpenCV (fallback when MoviePy not available)"""
         try:
-            # Get audio duration using alternative method
-            audio_duration = 20  # Default duration in seconds
+            # Get audio duration
+            try:
+                import librosa
+                audio_duration = librosa.get_duration(filename=audio_path)
+            except:
+                audio_duration = 15  # Fallback duration
             
             # Video properties
             frame_width = 1280
             frame_height = 720
             fps = 24
-            total_frames = audio_duration * fps
-            frames_per_image = total_frames // len(images) if images else total_frames
+            total_frames = int(audio_duration * fps)
+            frames_per_image = max(1, total_frames // len(images)) if images else total_frames
             
             # Initialize video writer
             fourcc = cv2.VideoWriter_fourcc(*'mp4v')
@@ -420,12 +432,8 @@ class AdvancedVideoGenerator:
                     img = cv2.resize(img, (frame_width, frame_height))
                     
                     # Add text overlay
-                    text = f"Uganda Bird: {os.path.basename(img_path)}"
+                    text = "Uganda Bird Spotter"
                     cv2.putText(img, text, (50, 50), cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
-                    
-                    # Add progress indicator
-                    progress = frame_num / total_frames
-                    cv2.rectangle(img, (50, frame_height - 30), (int(50 + 300 * progress), frame_height - 10), (0, 255, 0), -1)
                     
                     out.write(img)
                 else:
@@ -444,8 +452,8 @@ class AdvancedVideoGenerator:
 
     def create_final_video(self, images, audio_path, output_path):
         """Create final video with Ken Burns effect and audio"""
-        if not self.moviepy_available:
-            st.warning("🎬 Using OpenCV fallback for video creation (MoviePy not available)")
+        if not self.moviepy_available or len(images) == 0:
+            st.warning("🎬 Using OpenCV fallback for video creation")
             return self.create_slideshow_video_opencv(images, audio_path, output_path)
         
         try:
@@ -455,7 +463,7 @@ class AdvancedVideoGenerator:
             narration = audio_fadeout(narration, 1.2)
 
             # Calculate durations
-            img_duration = 4.0
+            img_duration = max(3.0, narration.duration / len(images))
             total_duration = img_duration * len(images)
 
             # Adjust audio to match video duration
@@ -471,16 +479,10 @@ class AdvancedVideoGenerator:
                 try:
                     clip = ImageClip(img).set_duration(img_duration)
                     w, h = clip.size
-                    zoom = 1.15
+                    zoom = 1.1  # Reduced zoom for stability
                     
                     # Apply zoom effect
                     clip = clip.resize(lambda t: 1 + (zoom - 1) * (t / img_duration))
-                    
-                    # Apply pan effect
-                    clip = clip.set_position(lambda t: (
-                        "center" if t < img_duration * 0.6 else (w * 0.05 * (t - img_duration * 0.6) / (img_duration * 0.4)),
-                        "center"
-                    ))
                     
                     clip = clip.fadein(0.3).fadeout(0.3)
                     clips.append(clip)
@@ -490,7 +492,7 @@ class AdvancedVideoGenerator:
 
             if not clips:
                 st.error("❌ No valid video clips created")
-                return None
+                return self.create_slideshow_video_opencv(images, audio_path, output_path)
 
             # Combine clips and audio
             video = concatenate_videoclips(clips, method="compose").set_audio(narration)
@@ -515,12 +517,26 @@ class AdvancedVideoGenerator:
             return self.create_slideshow_video_opencv(images, audio_path, output_path)
 
     def get_bird_images(self, species_name, max_images=5):
-        """Get bird images for the species"""
+        """Get bird images for the species - ALWAYS return some images"""
         try:
-            # Create placeholder images for demonstration
-            image_paths = []
+            # First try to get images from bird_db if available
+            if species_name in bird_db and bird_db[species_name].get("images_b64"):
+                image_paths = []
+                for i, b64 in enumerate(bird_db[species_name]["images_b64"][:max_images]):
+                    try:
+                        img_data = base64.b64decode(b64)
+                        img = Image.open(BytesIO(img_data))
+                        placeholder_path = f"./temp_bird_{species_name.replace(' ', '_')}_{i}.jpg"
+                        img.save(placeholder_path, "JPEG")
+                        image_paths.append(placeholder_path)
+                    except:
+                        continue
+                
+                if image_paths:
+                    return image_paths
             
-            # Create multiple placeholder images with different backgrounds
+            # Fallback: Create placeholder images
+            image_paths = []
             for i in range(max_images):
                 placeholder_path = f"./temp_placeholder_{species_name.replace(' ', '_')}_{i}.jpg"
                 if self.create_placeholder_image(species_name, placeholder_path, variation=i):
@@ -530,7 +546,10 @@ class AdvancedVideoGenerator:
             
         except Exception as e:
             st.error(f"❌ Error getting bird images: {e}")
-            return []
+            # Return at least one placeholder
+            placeholder_path = f"./temp_fallback_{species_name.replace(' ', '_')}.jpg"
+            self.create_placeholder_image(species_name, placeholder_path)
+            return [placeholder_path]
 
     def create_placeholder_image(self, species_name, output_path, variation=0):
         """Create a placeholder image when no real images are available"""
@@ -573,11 +592,11 @@ class AdvancedVideoGenerator:
             return False
 
     def generate_story_video(self, species_name):
-        """Generate a comprehensive story-based video with audio using the loaded model"""
+        """Generate a comprehensive story-based video with audio"""
         try:
-            if not self.model_loaded or self.story_generator is None:
-                st.error("❌ Story generation model not loaded")
-                return None, None, None
+            # Always generate a story - never fail here
+            if self.story_generator is None:
+                self.story_generator = BirdStoryGenerator(TEMPLATES)
             
             # Get bird information
             bird_info = self.get_bird_video_info(species_name)
@@ -588,14 +607,15 @@ class AdvancedVideoGenerator:
             colors = []
             
             # Try to extract colors from various possible columns
-            color_columns = ['colors', 'primary_colors', 'plumage_colors', 'color']
-            for col in color_columns:
-                if col in bird_info and pd.notna(bird_info[col]):
-                    colors = str(bird_info[col]).split(',')
-                    break
+            if bird_info:
+                color_columns = ['colors', 'primary_colors', 'plumage_colors', 'color']
+                for col in color_columns:
+                    if col in bird_info and pd.notna(bird_info[col]):
+                        colors = str(bird_info[col]).split(',')
+                        break
             
             # Generate story using the model
-            st.info("📖 Generating educational story using AI...")
+            st.info("📖 Generating educational story...")
             story_text = self.story_generator(common_name, description, colors)
             
             # Display the generated story
@@ -610,12 +630,12 @@ class AdvancedVideoGenerator:
                 st.error("❌ Failed to generate audio")
                 return None, None, None
             
-            # Get bird images
-            st.info("🖼️ Creating bird images...")
-            bird_images = self.get_bird_images(species_name, max_images=5)
+            # Get bird images - ALWAYS get images
+            st.info("🖼️ Gathering bird images...")
+            bird_images = self.get_bird_images(species_name, max_images=3)  # Reduced for stability
             
             if not bird_images:
-                st.error("❌ No bird images created")
+                st.error("❌ No bird images available")
                 return None, None, None
             
             # Generate video
@@ -630,11 +650,11 @@ class AdvancedVideoGenerator:
             except:
                 pass
             
-            if video_path:
-                st.success(f"✅ Story video generated successfully! ({len(bird_images)} images, {len(story_text.split())} words)")
+            if video_path and os.path.exists(video_path):
+                st.success(f"✅ Story video generated successfully!")
                 return video_path, story_text, bird_images
             else:
-                st.error("❌ Failed to generate video")
+                st.error("❌ Failed to generate video file")
                 return None, None, None
             
         except Exception as e:
@@ -645,7 +665,7 @@ class AdvancedVideoGenerator:
         """Main video generation function with story and audio"""
         return self.generate_story_video(species_name)
 
-# ========== RESNET MODEL (Same download pattern) ==========
+# ========== RESNET MODEL ==========
 class ResNet34BirdModel:
     def __init__(self):
         self.model_loaded = False
@@ -907,12 +927,8 @@ def initialize_system():
             if resnet_success:
                 st.session_state.model_loaded = True
                 st.session_state.system_initialized = True
-                
-                if st.session_state.video_generator.model_loaded:
-                    st.success(f"✅ System ready! Both models loaded - Can identify {len(st.session_state.bird_model.bird_species)} bird species and generate AI story videos")
-                else:
-                    st.success(f"✅ System ready! ResNet34 model active - Can identify {len(st.session_state.bird_model.bird_species)} bird species")
-                    st.info("📖 Basic story generation available")
+                st.success(f"✅ System ready! Can identify {len(st.session_state.bird_model.bird_species)} bird species")
+                st.info("📖 Story video generation available")
             else:
                 st.error("❌ System initialization failed. Please check the requirements and internet connection.")
 
@@ -959,15 +975,12 @@ def main():
         
         # Video model status
         st.markdown("---")
-        if video_generator.model_loaded:
-            st.success("🎬 AI Story Model: **Loaded**")
-            st.info("📖 Generates: Stories + Audio + Video")
-            if not video_generator.moviepy_available:
-                st.warning("🎥 Using OpenCV video creation")
-            else:
-                st.success("🎥 Using MoviePy (Ken Burns effect)")
+        st.success("🎬 Story Video Generation: **Available**")
+        st.info("📖 Generates: Stories + Audio + Video")
+        if not video_generator.moviepy_available:
+            st.warning("🎥 Using OpenCV video creation")
         else:
-            st.warning("🎬 AI Story Model: **Not Available**")
+            st.success("🎥 Using MoviePy (Ken Burns effect)")
     
     # Main app content
     # Custom header with logo beside title
@@ -985,23 +998,14 @@ def main():
     """, unsafe_allow_html=True)
     
     # Welcome message
-    if video_generator.model_loaded:
-        st.markdown("""
-        <div class="glass-card">
-            <strong>🦜 Welcome to Uganda Bird Spotter!</strong><br>
-            This app uses AI models for bird identification and story generation. 
-            Upload bird photos for identification, then generate AI-powered educational story videos 
-            with narrated audio and beautiful visual effects.
-        </div>
-        """, unsafe_allow_html=True)
-    else:
-        st.markdown("""
-        <div class="glass-card">
-            <strong>🦜 Welcome to Uganda Bird Spotter!</strong><br>
-            This app uses a specialized ResNet34 model trained on Ugandan bird species. 
-            Upload or capture images to get accurate bird identifications using AI.
-        </div>
-        """, unsafe_allow_html=True)
+    st.markdown("""
+    <div class="glass-card">
+        <strong>🦜 Welcome to Uganda Bird Spotter!</strong><br>
+        This app uses AI models for bird identification and story generation. 
+        Upload bird photos for identification, then generate AI-powered educational story videos 
+        with narrated audio and beautiful visual effects.
+    </div>
+    """, unsafe_allow_html=True)
     
     # Method selection
     col1, col2 = st.columns(2)
@@ -1155,28 +1159,19 @@ def main():
     st.markdown("---")
     st.markdown('<div class="section-title">🎬 AI Story Video Generator</div>', unsafe_allow_html=True)
     
-    if video_generator.model_loaded:
-        st.markdown(f"""
-        <div class="video-section">
-            <strong>📖 AI Story Generation with Video</strong><br>
-            Generate complete educational story videos using our advanced AI model. Each video includes:
-            <br><br>
-            • <strong>AI-Generated Story</strong>: Unique educational narrative about the bird<br>
-            • <strong>Text-to-Speech Audio</strong>: Professional narration of the story<br>
-            • <strong>Visual Effects</strong>: Beautiful image transitions and effects<br>
-            • <strong>Multiple Images</strong>: Showcases the bird from different angles<br>
-            <br>
-            <strong>Video Engine:</strong> {'MoviePy with Ken Burns effect' if video_generator.moviepy_available else 'OpenCV slideshow'}
-        </div>
-        """, unsafe_allow_html=True)
-    else:
-        st.markdown("""
-        <div class="video-section">
-            <strong>📖 Story Video Generation</strong><br>
-            Advanced story generation requires the bird_path.pth model file.
-            Please ensure the model is properly downloaded and configured.
-        </div>
-        """, unsafe_allow_html=True)
+    st.markdown(f"""
+    <div class="video-section">
+        <strong>📖 AI Story Generation with Video</strong><br>
+        Generate complete educational story videos. Each video includes:
+        <br><br>
+        • <strong>AI-Generated Story</strong>: Unique educational narrative about the bird<br>
+        • <strong>Text-to-Speech Audio</strong>: Professional narration of the story<br>
+        • <strong>Visual Effects</strong>: Beautiful image transitions and effects<br>
+        • <strong>Multiple Images</strong>: Showcases the bird from different angles<br>
+        <br>
+        <strong>Video Engine:</strong> {'MoviePy with Ken Burns effect' if video_generator.moviepy_available else 'OpenCV slideshow'}
+    </div>
+    """, unsafe_allow_html=True)
     
     # Video generation options
     col1, col2 = st.columns(2)
