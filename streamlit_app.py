@@ -481,10 +481,8 @@ class AdvancedVideoGenerator:
             
             out.release()
             
-            # Combine audio with video using ffmpeg if available
-            final_video_path = self.combine_audio_video_ffmpeg(output_path, audio_path, f"final_{output_path}")
-            
-            return final_video_path if final_video_path else output_path
+            # Return the video path (audio will be handled separately)
+            return output_path
             
         except Exception as e:
             st.error(f"❌ OpenCV video creation error: {e}")
@@ -533,29 +531,6 @@ class AdvancedVideoGenerator:
                 # Add main text
                 text_color = (int(255 * alpha), int(255 * alpha), int(255 * alpha))
                 cv2.putText(frame, line, (50, y_pos), cv2.FONT_HERSHEY_SIMPLEX, 0.7, text_color, 2)
-
-    def combine_audio_video_ffmpeg(self, video_path, audio_path, output_path):
-        """Combine audio and video using ffmpeg"""
-        try:
-            import subprocess
-            cmd = [
-                'ffmpeg', '-y',  # Overwrite output file
-                '-i', video_path,
-                '-i', audio_path,
-                '-c:v', 'copy',
-                '-c:a', 'aac',
-                '-shortest',
-                output_path
-            ]
-            result = subprocess.run(cmd, capture_output=True, text=True)
-            if result.returncode == 0:
-                return output_path
-            else:
-                st.warning("⚠️ FFmpeg audio combination failed, using video without audio")
-                return video_path
-        except Exception as e:
-            st.warning(f"⚠️ FFmpeg not available: {e}. Video will be created without audio sync.")
-            return video_path
 
     def get_bird_images(self, species_name, max_images=5):
         """Get or create bird images for the species"""
@@ -1178,7 +1153,7 @@ def main():
         if video_generator.model_loaded:
             st.success("🎬 Story Model: **bird_path.pth**")
             st.info("📖 Generates: Ugandan Bird Stories")
-            st.success("🎥 Using: OpenCV Video Engine")
+            st.success("🎥 Video Engine: **OpenCV Professional**")
         else:
             st.warning("🎬 Story Model: **Not Available**")
     
@@ -1380,7 +1355,7 @@ def main():
             • <strong>Story Text Overlay</strong>: Animated text display synchronized with audio<br>
             • <strong>Progress Tracking</strong>: Visual progress indicator<br>
             <br>
-            <strong>Model Source:</strong> bird_path.pth trained on Ugandan bird stories
+            <strong>Video Engine:</strong> OpenCV Professional Video Creation
         </div>
         """, unsafe_allow_html=True)
     else:
@@ -1461,7 +1436,7 @@ def main():
             
             # Video information
             file_size = os.path.getsize(st.session_state.generated_video_path) // (1024 * 1024)
-            st.info(f"**Video Details:** {st.session_state.selected_species_for_video} | bird_path.pth Story | {file_size}MB | Audio Narration")
+            st.info(f"**Video Details:** {st.session_state.selected_species_for_video} | bird_path.pth Story | {file_size}MB | OpenCV Professional Video")
             
             # Download buttons
             col1, col2 = st.columns(2)
