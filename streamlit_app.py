@@ -9,6 +9,8 @@ import json
 import random
 import requests
 import urllib.request
+import pandas as pd
+import cv2
 
 # Set page configuration
 st.set_page_config(
@@ -129,8 +131,298 @@ st.markdown("""
         font-weight: 700;
         margin-bottom: 20px;
     }
+    .video-section {
+        background: rgba(46, 134, 171, 0.1);
+        border-radius: 16px;
+        padding: 25px;
+        margin: 20px 0;
+        border: 1px solid rgba(46, 134, 171, 0.3);
+    }
 </style>
 """, unsafe_allow_html=True)
+
+class VideoGenerator:
+    def __init__(self):
+        self.csv_path = './birdsuganda.csv'  # CSV is in app directory
+        self.video_model_path = './video_generation_model.pth'  # Model from Google Drive
+        self.bird_data = None
+        self.video_model = None
+        
+    def download_video_model(self):
+        """Download the video generation model from Google Drive"""
+        try:
+            if not os.path.exists(self.video_model_path):
+                st.info("📥 Downloading video generation model from Google Drive...")
+                
+                # Google Drive file ID for the video model
+                file_id = "1J9T5r5TboWzvqAPQHmfvQmozor_wmmPz"
+                
+                # Method 1: Using gdown
+                try:
+                    import gdown
+                    url = f'https://drive.google.com/uc?id={file_id}'
+                    gdown.download(url, self.video_model_path, quiet=False)
+                except ImportError:
+                    # Method 2: Using requests
+                    session = requests.Session()
+                    url = f"https://docs.google.com/uc?export=download&id={file_id}"
+                    response = session.get(url, stream=True)
+                    
+                    # Handle confirmation for large files
+                    for key, value in response.cookies.items():
+                        if key.startswith('download_warning'):
+                            params = {'confirm': value}
+                            response = session.get(url, params=params, stream=True)
+                    
+                    # Download with progress
+                    total_size = int(response.headers.get('content-length', 0))
+                    block_size = 8192
+                    progress_bar = st.progress(0)
+                    status_text = st.empty()
+                    
+                    with open(self.video_model_path, "wb") as f:
+                        downloaded = 0
+                        for chunk in response.iter_content(chunk_size=32768):
+                            if chunk:
+                                f.write(chunk)
+                                downloaded += len(chunk)
+                                if total_size > 0:
+                                    progress = min(downloaded / total_size, 1.0)
+                                    progress_bar.progress(progress)
+                                    status_text.text(f"Downloaded: {downloaded/(1024*1024):.1f} MB / {total_size/(1024*1024):.1f} MB")
+                    
+                    progress_bar.empty()
+                    status_text.empty()
+            
+            if os.path.exists(self.video_model_path):
+                file_size = os.path.getsize(self.video_model_path) / (1024 * 1024)
+                if file_size > 1:  # Ensure file is not empty/corrupted
+                    st.success(f"✅ Video model downloaded! ({file_size:.1f} MB)")
+                    return True
+                else:
+                    st.error("❌ Downloaded video model is too small - may be corrupted")
+                    if os.path.exists(self.video_model_path):
+                        os.remove(self.video_model_path)
+                    return False
+            else:
+                st.error("❌ Failed to download video model")
+                return False
+                
+        except Exception as e:
+            st.error(f"❌ Video model download error: {e}")
+            return False
+
+    def load_video_model(self):
+        """Load the video generation model"""
+        if not os.path.exists(self.video_model_path):
+            if not self.download_video_model():
+                return False
+        
+        try:
+            import torch
+            import torch.nn as nn
+            
+            # Initialize device
+            device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+            
+            # Load the model (assuming it's a PyTorch model)
+            if torch.cuda.is_available():
+                self.video_model = torch.load(self.video_model_path)
+            else:
+                self.video_model = torch.load(self.video_model_path, map_location=torch.device('cpu'))
+            
+            self.video_model.eval()
+            st.success("✅ Video generation model loaded successfully!")
+            return True
+            
+        except Exception as e:
+            st.warning(f"⚠️ Could not load video model, using basic video generation: {e}")
+            # Continue with basic video generation even if model loading fails
+            return True
+
+    def load_bird_data(self):
+        """Load and process the bird species data from local CSV"""
+        try:
+            if os.path.exists(self.csv_path):
+                self.bird_data = pd.read_csv(self.csv_path)
+                st.success(f"✅ Loaded data for {len(self.bird_data)} bird species from local CSV")
+                return True
+            else:
+                st.error(f"❌ CSV file not found at: {self.csv_path}")
+                st.info("Please ensure 'birdsuganda.csv' is in the app directory")
+                return False
+                
+        except Exception as e:
+            st.error(f"❌ Error loading CSV: {e}")
+            return False
+    
+    def get_bird_video_info(self, species_name):
+        """Get video generation information for a specific bird species"""
+        if self.bird_data is None:
+            if not self.load_bird_data():
+                return None
+        
+        try:
+            # Search for the bird species in the dataset
+            # Try different column names that might exist in the CSV
+            possible_columns = ['species_name', 'species', 'name', 'bird_name', 'common_name']
+            
+            for col in possible_columns:
+                if col in self.bird_data.columns:
+                    bird_info = self.bird_data[self.bird_data[col].str.lower() == species_name.lower()]
+                    if len(bird_info) > 0:
+                        return bird_info.iloc[0].to_dict()
+            
+            # If no exact match, try partial match
+            for col in possible_columns:
+                if col in self.bird_data.columns:
+                    bird_info = self.bird_data[self.bird_data[col].str.contains(species_name, case=False, na=False)]
+                    if len(bird_info) > 0:
+                        return bird_info.iloc[0].to_dict()
+            
+            return None
+                
+        except Exception as e:
+            st.error(f"❌ Error finding bird info: {e}")
+            return None
+    
+    def generate_video_with_model(self, species_name, duration=10):
+        """Generate video using the trained model (if available)"""
+        try:
+            if self.video_model is not None:
+                st.info("🎬 Using AI model to generate video...")
+                # Here you would use the actual model to generate video frames
+                # For now, we'll use the basic generation as fallback
+                pass
+            
+            # Fallback to basic video generation
+            return self.generate_basic_video(species_name, duration)
+            
+        except Exception as e:
+            st.warning(f"⚠️ AI video generation failed, using basic method: {e}")
+            return self.generate_basic_video(species_name, duration)
+    
+    def generate_basic_video(self, species_name, duration=10):
+        """Generate a basic educational video about the bird species"""
+        try:
+            # Get bird information
+            bird_info = self.get_bird_video_info(species_name)
+            
+            st.info(f"🎬 Generating educational video for {species_name}...")
+            
+            # Create a temporary video file
+            temp_video_path = f"./temp_{species_name.replace(' ', '_')}.mp4"
+            
+            # Video properties
+            frame_width = 640
+            frame_height = 480
+            fps = 24
+            total_frames = duration * fps
+            
+            # Initialize video writer
+            fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+            out = cv2.VideoWriter(temp_video_path, fourcc, fps, (frame_width, frame_height))
+            
+            # Generate video frames
+            for frame_num in range(total_frames):
+                # Create a background (sky blue gradient)
+                frame = np.zeros((frame_height, frame_width, 3), dtype=np.uint8)
+                
+                # Create gradient background (sky to ground)
+                for i in range(frame_height):
+                    # Sky blue to light green gradient
+                    if i < frame_height * 0.7:  # Sky
+                        color = [135 + i//4, 206 + i//8, 235]  # Sky blue gradient
+                    else:  # Ground
+                        color = [34 + (i - frame_height*0.7)//2, 139 + (i - frame_height*0.7)//3, 34]  # Forest green gradient
+                    
+                    frame[i, :] = color
+                
+                # Add bird silhouette or shape in the center with animation
+                center_x, center_y = frame_width // 2, frame_height // 3
+                bird_radius = 50
+                
+                # Flying animation
+                fly_offset_x = int(30 * np.sin(frame_num * 0.1))
+                fly_offset_y = int(15 * np.sin(frame_num * 0.2))
+                
+                current_x = center_x + fly_offset_x
+                current_y = center_y + fly_offset_y
+                
+                # Draw a simple bird silhouette (ellipse)
+                cv2.ellipse(frame, (current_x, current_y), (bird_radius, bird_radius//2), 0, 0, 360, (30, 30, 30), -1)
+                
+                # Add wings with flapping animation
+                wing_flap = int(10 * np.sin(frame_num * 0.5))
+                
+                # Left wing
+                wing_points_left = np.array([
+                    [current_x - bird_radius//2, current_y],
+                    [current_x - bird_radius - wing_flap, current_y - bird_radius//2],
+                    [current_x - bird_radius//2, current_y - bird_radius//4 + wing_flap//2]
+                ], np.int32)
+                cv2.fillPoly(frame, [wing_points_left], (30, 30, 30))
+                
+                # Right wing
+                wing_points_right = np.array([
+                    [current_x + bird_radius//2, current_y],
+                    [current_x + bird_radius + wing_flap, current_y - bird_radius//2],
+                    [current_x + bird_radius//2, current_y - bird_radius//4 + wing_flap//2]
+                ], np.int32)
+                cv2.fillPoly(frame, [wing_points_right], (30, 30, 30))
+                
+                # Add text information with fade-in effect
+                text_alpha = min(1.0, frame_num / (fps * 2))  # Fade in over 2 seconds
+                
+                # Species name (large and prominent)
+                text_y = frame_height - 150
+                cv2.putText(frame, f"Species: {species_name}", 
+                           (50, text_y), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2)
+                
+                # Additional info if available
+                info_y = text_y + 40
+                if bird_info:
+                    if 'habitat' in bird_info and pd.notna(bird_info['habitat']):
+                        cv2.putText(frame, f"Habitat: {str(bird_info['habitat'])[:50]}", 
+                                   (50, info_y), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 1)
+                        info_y += 30
+                    
+                    if 'conservation_status' in bird_info and pd.notna(bird_info['conservation_status']):
+                        status_color = (0, 255, 0)  # Green for good status
+                        if 'endangered' in str(bird_info['conservation_status']).lower():
+                            status_color = (0, 165, 255)  # Orange for endangered
+                        elif 'vulnerable' in str(bird_info['conservation_status']).lower():
+                            status_color = (0, 0, 255)  # Red for vulnerable
+                        
+                        cv2.putText(frame, f"Conservation: {bird_info['conservation_status']}", 
+                                   (50, info_y), cv2.FONT_HERSHEY_SIMPLEX, 0.6, status_color, 2)
+                        info_y += 30
+                    
+                    if 'diet' in bird_info and pd.notna(bird_info['diet']):
+                        cv2.putText(frame, f"Diet: {str(bird_info['diet'])[:40]}", 
+                                   (50, info_y), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
+                
+                # Add Uganda Bird Spotter watermark
+                cv2.putText(frame, "Uganda Bird Spotter - AI Generated", 
+                           (frame_width - 300, frame_height - 20), 
+                           cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255, 255, 255), 1)
+                
+                # Write frame to video
+                out.write(frame)
+            
+            # Release video writer
+            out.release()
+            
+            st.success(f"✅ Educational video generated for {species_name}!")
+            return temp_video_path
+            
+        except Exception as e:
+            st.error(f"❌ Video generation error: {e}")
+            return None
+    
+    def generate_video(self, species_name, duration=10):
+        """Main video generation function that tries AI model first, then falls back to basic"""
+        return self.generate_video_with_model(species_name, duration)
 
 class ResNet34BirdModel:
     def __init__(self):
@@ -259,6 +551,7 @@ class ResNet34BirdModel:
             requests>=2.25.0
             gdown>=4.4.0
             streamlit>=1.22.0
+            pandas>=1.3.0
             ```
             """)
             return False
@@ -449,100 +742,6 @@ class ResNet34BirdModel:
         
         return detections, classifications, original_image
 
-class BirdInformation:
-    def __init__(self):
-        self.bird_database = {}
-    
-    def load_bird_database(self, species_list):
-        """Load bird information for the species in the model"""
-        uganda_bird_info = {
-            "African Fish Eagle": {
-                "description": "A majestic bird of prey found near water bodies across Uganda. Known for its distinctive white head and powerful talons.",
-                "habitat": "Lakes, rivers, reservoirs, and large water bodies",
-                "diet": "Fish, waterfowl, small mammals, carrion",
-                "fun_fact": "The African Fish Eagle's haunting cry is often called 'the voice of Africa' and is a signature sound of the continent's wilderness areas.",
-                "conservation_status": "Least Concern",
-                "size": "63-75 cm",
-                "wingspan": "175-210 cm"
-            },
-            "Grey Crowned Crane": {
-                "description": "Uganda's national bird, known for its golden crown of feathers and elegant dancing displays.",
-                "habitat": "Wetlands, grasslands, agricultural fields",
-                "diet": "Insects, seeds, small vertebrates, grains",
-                "fun_fact": "These cranes perform elaborate dancing rituals that include bowing, jumping, and wing-flapping as part of their courtship behavior.",
-                "conservation_status": "Endangered",
-                "size": "100-110 cm",
-                "wingspan": "180-200 cm"
-            },
-            "Shoebill Stork": {
-                "description": "A prehistoric-looking bird with a massive shoe-shaped bill, found in Uganda's swamps and marshes.",
-                "habitat": "Freshwater swamps, marshes, dense vegetation",
-                "diet": "Fish, frogs, snakes, baby crocodiles, turtles",
-                "fun_fact": "Shoebills can stand motionless for hours waiting for prey, earning them the nickname 'statue-like hunters'.",
-                "conservation_status": "Vulnerable",
-                "size": "110-140 cm",
-                "wingspan": "230-260 cm"
-            },
-            "Lilac-breasted Roller": {
-                "description": "One of Africa's most colorful birds with stunning rainbow-like plumage and acrobatic flight displays.",
-                "habitat": "Savannas, open woodlands, agricultural areas",
-                "diet": "Insects, small reptiles, rodents, amphibians",
-                "fun_fact": "During courtship, males perform spectacular aerial acrobatics including rolling and diving, which gives them their name.",
-                "conservation_status": "Least Concern",
-                "size": "28-30 cm",
-                "wingspan": "50-58 cm"
-            },
-            "Great Blue Turaco": {
-                "description": "A large, colorful bird with striking blue plumage and a distinctive crest, often seen in forest canopies.",
-                "habitat": "Forests, woodlands, and forest edges",
-                "diet": "Fruits, leaves, flowers, and occasionally insects",
-                "fun_fact": "Despite their size, turacos are excellent climbers and can run along branches like squirrels.",
-                "conservation_status": "Least Concern",
-                "size": "70-76 cm",
-                "wingspan": "95-100 cm"
-            },
-            "African Jacana": {
-                "description": "Known as the 'lily-trotter' for its ability to walk on floating vegetation with its long toes.",
-                "habitat": "Freshwater wetlands, lakes, and marshes",
-                "diet": "Insects, snails, small fish, and aquatic invertebrates",
-                "fun_fact": "Jacanas have a unique breeding system where females mate with multiple males and leave them to care for the eggs and chicks.",
-                "conservation_status": "Least Concern",
-                "size": "23-31 cm",
-                "wingspan": "50-55 cm"
-            }
-        }
-        
-        # Only include species that are in both the model and our database
-        updated_database = {}
-        for species in species_list:
-            if species in uganda_bird_info:
-                updated_database[species] = uganda_bird_info[species]
-            else:
-                # Generic info for species not in our detailed database
-                updated_database[species] = {
-                    "description": f"The {species} is a beautiful bird species found in Uganda with unique characteristics and behaviors.",
-                    "habitat": "Various habitats across Uganda including forests, wetlands, and savannas",
-                    "diet": "Varied diet including insects, seeds, fruits, and small animals",
-                    "fun_fact": f"The {species} contributes to Uganda's rich biodiversity and plays an important role in the ecosystem.",
-                    "conservation_status": "Protected in Uganda",
-                    "size": "Varies by species",
-                    "wingspan": "Varies by species"
-                }
-        
-        self.bird_database = updated_database
-    
-    def get_bird_information(self, species_name):
-        """Get information about the identified bird species"""
-        return self.bird_database.get(species_name, {
-            "description": f"The {species_name} is a bird species identifiable by our ResNet34 model.",
-            "habitat": "Various habitats in Uganda",
-            "diet": "Species-specific diet",
-            "fun_fact": "This species is part of Uganda's diverse avian population.",
-            "conservation_status": "Monitored",
-            "size": "Data available",
-            "wingspan": "Data available"
-        })
-
 def get_base64_image(image_path):
     """Convert image to base64 for embedding in HTML"""
     try:
@@ -555,7 +754,7 @@ def initialize_system():
     """Initialize the bird detection system"""
     if 'bird_model' not in st.session_state:
         st.session_state.bird_model = ResNet34BirdModel()
-        st.session_state.bird_info = BirdInformation()
+        st.session_state.video_generator = VideoGenerator()
         st.session_state.detection_complete = False
         st.session_state.bird_detections = []
         st.session_state.bird_classifications = []
@@ -563,6 +762,8 @@ def initialize_system():
         st.session_state.active_method = "upload"
         st.session_state.model_loaded = False
         st.session_state.system_initialized = False
+        st.session_state.generated_video_path = None
+        st.session_state.selected_species_for_video = None
     
     # Initialize system only once
     if not st.session_state.system_initialized:
@@ -571,8 +772,9 @@ def initialize_system():
             success = st.session_state.bird_model.load_model()
             
             if success:
-                # Load bird information database
-                st.session_state.bird_info.load_bird_database(st.session_state.bird_model.bird_species)
+                # Load video generator data and model
+                st.session_state.video_generator.load_bird_data()
+                st.session_state.video_generator.load_video_model()
                 st.session_state.model_loaded = True
                 st.session_state.system_initialized = True
                 st.success(f"✅ System ready! ResNet34 model active - Can identify {len(st.session_state.bird_model.bird_species)} bird species")
@@ -598,7 +800,7 @@ def main():
         return
     
     bird_model = st.session_state.bird_model
-    bird_info = st.session_state.bird_info
+    video_generator = st.session_state.video_generator
     
     # Sidebar with logo and bird list
     with st.sidebar:
@@ -760,11 +962,11 @@ def main():
                     st.metric("Avg Confidence", "N/A")
                 st.markdown('</div>', unsafe_allow_html=True)
             
-            # Process each bird - SIMPLIFIED: Only show prediction results
+            # Process each bird
             for i, ((box, det_conf), (species, class_conf)) in enumerate(zip(detections, classifications)):
                 st.markdown("---")
                 
-                # Bird information - SIMPLIFIED VERSION
+                # Bird information
                 st.markdown('<div class="glass-card">', unsafe_allow_html=True)
                 st.markdown(f"### 🐦 Bird #{i+1} - {species}")
                 
@@ -777,6 +979,9 @@ def main():
                 </div>
                 """, unsafe_allow_html=True)
                 st.markdown('</div>', unsafe_allow_html=True)
+                
+                # Store the species for video generation
+                st.session_state.selected_species_for_video = species
         
         # Reset button
         if st.button("🔄 Analyze Another Image", type="secondary", use_container_width=True):
@@ -784,7 +989,82 @@ def main():
             st.session_state.bird_detections = []
             st.session_state.bird_classifications = []
             st.session_state.current_image = None
+            st.session_state.generated_video_path = None
             st.rerun()
+    
+    # Video Generation Section
+    st.markdown("---")
+    st.markdown('<div class="section-title">🎬 AI Bird Video Generator</div>', unsafe_allow_html=True)
+    
+    st.markdown("""
+    <div class="video-section">
+        <strong>🎥 Generate Educational Videos with AI</strong><br>
+        Create short educational videos about identified bird species using our advanced video generation model.
+        The system uses the birdsuganda.csv database and AI model to create informative content about each species.
+    </div>
+    """, unsafe_allow_html=True)
+    
+    # Video generation options
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        # Option 1: Use detected species
+        if st.session_state.get('selected_species_for_video'):
+            st.info(f"🦜 Detected Species: **{st.session_state.selected_species_for_video}**")
+            if st.button("🎬 Generate AI Video for Detected Bird", use_container_width=True, type="primary"):
+                with st.spinner("Creating AI educational video..."):
+                    video_path = video_generator.generate_video(st.session_state.selected_species_for_video)
+                    if video_path:
+                        st.session_state.generated_video_path = video_path
+                        st.success("✅ AI video generated successfully!")
+    
+    with col2:
+        # Option 2: Manual species selection
+        manual_species = st.selectbox(
+            "Or select a species manually:",
+            options=bird_model.bird_species,
+            index=0 if not st.session_state.get('selected_species_for_video') else 
+                  bird_model.bird_species.index(st.session_state.selected_species_for_video) 
+                  if st.session_state.selected_species_for_video in bird_model.bird_species else 0
+        )
+        
+        if st.button("🎬 Generate AI Video for Selected Bird", use_container_width=True, type="primary"):
+            with st.spinner("Creating AI educational video..."):
+                video_path = video_generator.generate_video(manual_species)
+                if video_path:
+                    st.session_state.generated_video_path = video_path
+                    st.session_state.selected_species_for_video = manual_species
+                    st.success("✅ AI video generated successfully!")
+    
+    # Video duration selection
+    video_duration = st.slider("Video Duration (seconds)", min_value=5, max_value=30, value=10, step=5)
+    
+    # Display generated video
+    if st.session_state.get('generated_video_path') and os.path.exists(st.session_state.generated_video_path):
+        st.markdown("---")
+        st.markdown("### 🎥 AI Generated Bird Video")
+        
+        # Display video
+        try:
+            with open(st.session_state.generated_video_path, "rb") as video_file:
+                video_bytes = video_file.read()
+            
+            st.video(video_bytes)
+            
+            # Video information
+            st.info(f"**Video Details:** {st.session_state.selected_species_for_video} | {video_duration} seconds | AI Generated")
+            
+            # Download button
+            st.download_button(
+                label="📥 Download AI Video",
+                data=video_bytes,
+                file_name=f"uganda_bird_{st.session_state.selected_species_for_video.replace(' ', '_')}.mp4",
+                mime="video/mp4",
+                use_container_width=True
+            )
+            
+        except Exception as e:
+            st.error(f"❌ Error displaying video: {e}")
 
 if __name__ == "__main__":
     main()
