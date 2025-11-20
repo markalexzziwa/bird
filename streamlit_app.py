@@ -17,40 +17,69 @@ from gtts import gTTS
 import warnings
 import subprocess
 import sys
+import importlib
 warnings.filterwarnings('ignore')
 
-# Force install and import MoviePy
-try:
-    from moviepy.editor import (
-        AudioFileClip, ImageClip, concatenate_videoclips,
-        VideoFileClip, concatenate_audioclips
-    )
-    from moviepy.audio.fx.all import audio_fadein, audio_fadeout
-    from moviepy.video.fx.all import resize
-    MOVIEPY_AVAILABLE = True
-except ImportError:
-    # Try to install moviepy automatically
+# ========== FORCE MOVIEPY AVAILABILITY ==========
+def ensure_moviepy_available():
+    """Ensure MoviePy is available by installing it if necessary"""
     try:
-        st.warning("🎬 MoviePy not found. Installing now...")
-        
-        # Install moviepy and dependencies
-        subprocess.check_call([sys.executable, "-m", "pip", "install", "moviepy", "decorator", "proglog"])
-        
-        # Try to import again after installation
+        # Try to import MoviePy
         from moviepy.editor import (
             AudioFileClip, ImageClip, concatenate_videoclips,
             VideoFileClip, concatenate_audioclips
         )
         from moviepy.audio.fx.all import audio_fadein, audio_fadeout
         from moviepy.video.fx.all import resize
-        
-        MOVIEPY_AVAILABLE = True
-        st.success("✅ MoviePy installed successfully!")
-        
-    except Exception as e:
-        MOVIEPY_AVAILABLE = False
-        st.error(f"❌ MoviePy installation failed: {e}")
-        st.info("Please install manually: pip install moviepy decorator proglog")
+        return True
+    except ImportError:
+        # MoviePy not available, try to install it
+        try:
+            st.warning("🎬 MoviePy not found. Installing MoviePy and dependencies...")
+            
+            # Install required packages
+            packages = ["moviepy", "decorator", "proglog", "imageio", "imageio-ffmpeg"]
+            
+            for package in packages:
+                try:
+                    subprocess.check_call([
+                        sys.executable, "-m", "pip", "install", 
+                        package, "--quiet", "--no-warn-script-location"
+                    ])
+                    st.success(f"✅ Installed {package}")
+                except Exception as e:
+                    st.warning(f"⚠️ Could not install {package}: {e}")
+            
+            # Try to import again
+            from moviepy.editor import (
+                AudioFileClip, ImageClip, concatenate_videoclips,
+                VideoFileClip, concatenate_audioclips
+            )
+            from moviepy.audio.fx.all import audio_fadein, audio_fadeout
+            from moviepy.video.fx.all import resize
+            
+            st.success("✅ MoviePy installed successfully!")
+            return True
+            
+        except Exception as e:
+            st.error(f"❌ MoviePy installation failed: {e}")
+            st.info("Please install manually: pip install moviepy decorator proglog imageio imageio-ffmpeg")
+            return False
+
+# Ensure MoviePy is available at startup
+MOVIEPY_AVAILABLE = ensure_moviepy_available()
+
+if MOVIEPY_AVAILABLE:
+    # Import MoviePy components
+    from moviepy.editor import (
+        AudioFileClip, ImageClip, concatenate_videoclips,
+        VideoFileClip, concatenate_audioclips
+    )
+    from moviepy.audio.fx.all import audio_fadein, audio_fadeout
+    from moviepy.video.fx.all import resize
+else:
+    st.error("❌ CRITICAL: MoviePy is required but not available. The app cannot continue.")
+    st.stop()
 
 # Set page configuration
 st.set_page_config(
@@ -413,7 +442,6 @@ class AdvancedVideoGenerator:
         self.csv_path = './birdsuganda.csv'
         self.bird_data = None
         self.video_duration = 20
-        self.moviepy_available = MOVIEPY_AVAILABLE
         
         # CRITICAL: Must use bird_path.pth - no alternatives
         if video_model_data is None:
@@ -543,8 +571,9 @@ class AdvancedVideoGenerator:
 
     def create_final_video(self, images, audio_path, output_path):
         """Create final video with Ken Burns effect and audio - FORCE MoviePy"""
-        if not self.moviepy_available:
-            st.error("❌ MoviePy is required but not available.")
+        # Double-check MoviePy availability
+        if not MOVIEPY_AVAILABLE:
+            st.error("❌ CRITICAL: MoviePy is required but not available.")
             return None
         
         try:
@@ -790,6 +819,10 @@ class ResNet34BirdModel:
             pandas>=1.3.0
             gtts>=2.2.0
             moviepy>=1.0.0
+            decorator>=5.1.0
+            proglog>=0.1.9
+            imageio>=2.9.0
+            imageio-ffmpeg>=0.4.5
             ```
             """)
             return False
@@ -1016,6 +1049,7 @@ def initialize_system():
                 st.session_state.system_initialized = True
                 st.success(f"✅ System ready! Can identify {len(st.session_state.bird_model.bird_species)} bird species")
                 st.success("🎬 Story video generation ready with bird_path.pth")
+                st.success("🎥 MoviePy available for video creation")
             else:
                 st.error("❌ System initialization failed. Please check the requirements and internet connection.")
 
@@ -1064,10 +1098,7 @@ def main():
         st.markdown("---")
         st.success("🎬 Story Video Generation: **bird_path.pth**")
         st.info("📖 Powered by: Advanced AI Model")
-        if video_generator.moviepy_available:
-            st.success("🎥 Using MoviePy (Ken Burns effect)")
-        else:
-            st.error("❌ MoviePy not available")
+        st.success("🎥 MoviePy: **Available**")
     
     # Main app content
     # Custom header with logo beside title
@@ -1256,7 +1287,7 @@ def main():
         • <strong>Visual Effects</strong>: Beautiful image transitions and effects<br>
         • <strong>Multiple Images</strong>: Showcases the bird from different angles<br>
         <br>
-        <strong>Powered by:</strong> bird_path.pth AI Model
+        <strong>Powered by:</strong> bird_path.pth AI Model + MoviePy
     </div>
     """, unsafe_allow_html=True)
     
