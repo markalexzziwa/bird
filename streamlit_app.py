@@ -17,20 +17,6 @@ from gtts import gTTS
 import warnings
 warnings.filterwarnings('ignore')
 
-# Try to import moviepy with fallback
-try:
-    from moviepy.editor import (
-        AudioFileClip, ImageClip, concatenate_videoclips,
-        VideoFileClip, concatenate_audioclips
-    )
-    from moviepy.audio.fx.all import audio_fadein, audio_fadeout
-    from moviepy.video.fx.all import resize
-    from moviepy.config import change_settings
-    MOVIEPY_AVAILABLE = True
-except ImportError:
-    MOVIEPY_AVAILABLE = False
-    st.warning("🎬 MoviePy not available. Video creation will use OpenCV fallback.")
-
 # Set page configuration
 st.set_page_config(
     page_title="Uganda Bird Spotter",
@@ -202,7 +188,6 @@ class AdvancedVideoGenerator:
         self.model_loaded = False
         self.video_duration = 20
         self.story_generator = None
-        self.moviepy_available = MOVIEPY_AVAILABLE
         
     def download_video_model(self):
         """Download the video generation model from Google Drive"""
@@ -364,195 +349,308 @@ class AdvancedVideoGenerator:
     def natural_tts(self, text, filename):
         """Convert text to speech using gTTS"""
         try:
-            tts = gTTS(text=text, lang='en')
+            tts = gTTS(text=text, lang='en', slow=False)
             tts.save(filename)
             return filename
         except Exception as e:
             st.error(f"❌ Error generating speech: {e}")
             return None
 
-    def create_slideshow_video_opencv(self, images, audio_path, output_path):
-        """Create slideshow video using OpenCV (fallback when MoviePy not available)"""
+    def get_audio_duration(self, audio_path):
+        """Get audio duration using alternative method"""
         try:
-            # Get audio duration using alternative method
-            audio_duration = 20  # Default duration in seconds
+            # For MP3 files, we can estimate duration based on file size
+            # This is a rough estimation - 1MB ≈ 1 minute of audio
+            file_size = os.path.getsize(audio_path)
+            duration = max(15, min(60, file_size / (16 * 1024)))  # Rough estimation
+            return duration
+        except:
+            return 20  # Default fallback
+
+    def create_story_video_with_opencv(self, images, audio_path, output_path, story_text):
+        """Create a professional story video using OpenCV with text overlays"""
+        try:
+            # Get audio duration
+            audio_duration = self.get_audio_duration(audio_path)
             
             # Video properties
             frame_width = 1280
             frame_height = 720
             fps = 24
-            total_frames = audio_duration * fps
-            frames_per_image = total_frames // len(images) if images else total_frames
+            total_frames = int(audio_duration * fps)
+            
+            if not images:
+                st.error("❌ No images available for video creation")
+                return None
+            
+            frames_per_image = max(1, total_frames // len(images))
             
             # Initialize video writer
             fourcc = cv2.VideoWriter_fourcc(*'mp4v')
             out = cv2.VideoWriter(output_path, fourcc, fps, (frame_width, frame_height))
             
+            # Split story into parts for display
+            story_parts = self.split_story_for_display(story_text)
+            
             # Create frames
             for frame_num in range(total_frames):
                 img_idx = min(len(images) - 1, frame_num // frames_per_image)
-                img_path = images[img_idx]
+                story_part_idx = min(len(story_parts) - 1, frame_num // (total_frames // len(story_parts)))
                 
-                # Load and resize image
-                img = cv2.imread(img_path)
-                if img is not None:
-                    img = cv2.resize(img, (frame_width, frame_height))
-                    
-                    # Add text overlay
-                    text = f"Uganda Bird: {os.path.basename(img_path)}"
-                    cv2.putText(img, text, (50, 50), cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
-                    
-                    # Add progress indicator
-                    progress = frame_num / total_frames
-                    cv2.rectangle(img, (50, frame_height - 30), (int(50 + 300 * progress), frame_height - 10), (0, 255, 0), -1)
-                    
-                    out.write(img)
-                else:
-                    # Create placeholder frame if image loading fails
+                # Load and process image
+                img_path = images[img_idx]
+                frame = cv2.imread(img_path)
+                
+                if frame is None:
+                    # Create a colored background frame if image loading fails
                     frame = np.zeros((frame_height, frame_width, 3), dtype=np.uint8)
-                    cv2.putText(frame, "Bird Image", (frame_width//2 - 100, frame_height//2), 
-                               cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
-                    out.write(frame)
+                    colors = [(70, 130, 180), (60, 179, 113), (186, 85, 211)]
+                    frame[:, :] = colors[img_idx % len(colors)]
+                
+                # Resize frame to target dimensions
+                frame = cv2.resize(frame, (frame_width, frame_height))
+                
+                # Add dark overlay for better text visibility
+                overlay = frame.copy()
+                cv2.rectangle(overlay, (0, 0), (frame_width, frame_height), (0, 0, 0), -1)
+                cv2.addWeighted(overlay, 0.3, frame, 0.7, 0, frame)
+                
+                # Add story text
+                current_story_part = story_parts[story_part_idx]
+                self.add_story_text_to_frame(frame, current_story_part, frame_num, total_frames)
+                
+                # Add header with bird name
+                cv2.putText(frame, f"Uganda Bird Spotter: {os.path.basename(images[0]).split('_')[0]}", 
+                           (50, 50), cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
+                
+                # Add progress bar
+                progress = frame_num / total_frames
+                cv2.rectangle(frame, (50, frame_height - 50), (frame_width - 50, frame_height - 30), (100, 100, 100), -1)
+                cv2.rectangle(frame, (50, frame_height - 50), (50 + int((frame_width - 100) * progress), frame_height - 30), (0, 200, 255), -1)
+                
+                # Add frame counter
+                cv2.putText(frame, f"Frame {frame_num + 1}/{total_frames}", 
+                           (frame_width - 200, frame_height - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (200, 200, 200), 1)
+                
+                out.write(frame)
             
             out.release()
-            return output_path
+            
+            # Combine audio with video using ffmpeg if available
+            final_video_path = self.combine_audio_video_ffmpeg(output_path, audio_path, f"final_{output_path}")
+            
+            return final_video_path if final_video_path else output_path
             
         except Exception as e:
             st.error(f"❌ OpenCV video creation error: {e}")
             return None
 
-    def create_final_video(self, images, audio_path, output_path):
-        """Create final video with Ken Burns effect and audio"""
-        if not self.moviepy_available:
-            st.warning("🎬 Using OpenCV fallback for video creation (MoviePy not available)")
-            return self.create_slideshow_video_opencv(images, audio_path, output_path)
+    def split_story_for_display(self, story_text, max_chars_per_line=60):
+        """Split story into displayable parts"""
+        words = story_text.split()
+        lines = []
+        current_line = ""
         
-        try:
-            # Load and process audio
-            raw_audio = AudioFileClip(audio_path)
-            narration = audio_fadein(raw_audio, 0.6)
-            narration = audio_fadeout(narration, 1.2)
-
-            # Calculate durations
-            img_duration = 4.0
-            total_duration = img_duration * len(images)
-
-            # Adjust audio to match video duration
-            if narration.duration < total_duration:
-                loops = int(total_duration / narration.duration) + 1
-                narration = concatenate_audioclips([narration] * loops).subclip(0, total_duration)
+        for word in words:
+            if len(current_line + " " + word) <= max_chars_per_line:
+                current_line += " " + word if current_line else word
             else:
-                narration = narration.subclip(0, total_duration)
+                lines.append(current_line)
+                current_line = word
+        if current_line:
+            lines.append(current_line)
+        
+        # Group lines into parts for different frames
+        parts = []
+        lines_per_part = 3
+        for i in range(0, len(lines), lines_per_part):
+            part = "\n".join(lines[i:i + lines_per_part])
+            parts.append(part)
+        
+        return parts if parts else [story_text]
 
-            # Create video clips with Ken Burns effect
-            clips = []
-            for img in images:
-                try:
-                    clip = ImageClip(img).set_duration(img_duration)
-                    w, h = clip.size
-                    zoom = 1.15
-                    
-                    # Apply zoom effect
-                    clip = clip.resize(lambda t: 1 + (zoom - 1) * (t / img_duration))
-                    
-                    # Apply pan effect
-                    clip = clip.set_position(lambda t: (
-                        "center" if t < img_duration * 0.6 else (w * 0.05 * (t - img_duration * 0.6) / (img_duration * 0.4)),
-                        "center"
-                    ))
-                    
-                    clip = clip.fadein(0.3).fadeout(0.3)
-                    clips.append(clip)
-                except Exception as e:
-                    st.warning(f"⚠️ Could not process image {img}: {e}")
-                    continue
+    def add_story_text_to_frame(self, frame, text, frame_num, total_frames):
+        """Add story text to frame with animation"""
+        lines = text.split('\n')
+        y_start = 150
+        line_height = 40
+        
+        for i, line in enumerate(lines):
+            y_pos = y_start + i * line_height
+            
+            # Simple fade-in effect
+            alpha = min(1.0, (frame_num - (i * 10)) / 30)
+            alpha = max(0, alpha)
+            
+            if alpha > 0:
+                # Add text shadow for better readability
+                cv2.putText(frame, line, (52, y_pos + 2), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 0), 2)
+                # Add main text
+                text_color = (int(255 * alpha), int(255 * alpha), int(255 * alpha))
+                cv2.putText(frame, line, (50, y_pos), cv2.FONT_HERSHEY_SIMPLEX, 0.7, text_color, 2)
 
-            if not clips:
-                st.error("❌ No valid video clips created")
-                return None
-
-            # Combine clips and audio
-            video = concatenate_videoclips(clips, method="compose").set_audio(narration)
-            video = video.resize(height=720)
-            
-            # Write final video
-            video.write_videofile(
-                output_path, 
-                fps=24, 
-                codec="libx264", 
-                audio_codec="aac", 
-                preset="medium",
-                verbose=False,
-                logger=None
-            )
-            
-            return output_path
-            
+    def combine_audio_video_ffmpeg(self, video_path, audio_path, output_path):
+        """Combine audio and video using ffmpeg"""
+        try:
+            import subprocess
+            cmd = [
+                'ffmpeg', '-y',  # Overwrite output file
+                '-i', video_path,
+                '-i', audio_path,
+                '-c:v', 'copy',
+                '-c:a', 'aac',
+                '-shortest',
+                output_path
+            ]
+            result = subprocess.run(cmd, capture_output=True, text=True)
+            if result.returncode == 0:
+                return output_path
+            else:
+                st.warning("⚠️ FFmpeg audio combination failed, using video without audio")
+                return video_path
         except Exception as e:
-            st.error(f"❌ MoviePy video creation error: {e}")
-            st.info("🔄 Falling back to OpenCV video creation...")
-            return self.create_slideshow_video_opencv(images, audio_path, output_path)
+            st.warning(f"⚠️ FFmpeg not available: {e}. Video will be created without audio sync.")
+            return video_path
 
     def get_bird_images(self, species_name, max_images=5):
-        """Get bird images for the species"""
+        """Get or create bird images for the species"""
         try:
-            # Create placeholder images for demonstration
+            # Create professional placeholder images
             image_paths = []
             
-            # Create multiple placeholder images with different backgrounds
             for i in range(max_images):
                 placeholder_path = f"./temp_placeholder_{species_name.replace(' ', '_')}_{i}.jpg"
-                if self.create_placeholder_image(species_name, placeholder_path, variation=i):
+                if self.create_professional_placeholder(species_name, placeholder_path, i):
                     image_paths.append(placeholder_path)
             
             return image_paths
             
         except Exception as e:
-            st.error(f"❌ Error getting bird images: {e}")
+            st.error(f"❌ Error creating bird images: {e}")
             return []
 
-    def create_placeholder_image(self, species_name, output_path, variation=0):
-        """Create a placeholder image when no real images are available"""
+    def create_professional_placeholder(self, species_name, output_path, variation=0):
+        """Create professional placeholder images with bird illustrations"""
         try:
-            # Create a simple image with bird name
-            img = np.zeros((400, 600, 3), dtype=np.uint8)
+            # Create image with higher resolution
+            width, height = 800, 600
+            img = np.zeros((height, width, 3), dtype=np.uint8)
             
-            # Different background colors for variations
-            colors = [
-                [70, 130, 180],   # Steel blue
-                [60, 179, 113],   # Medium sea green
-                [186, 85, 211],   # Medium orchid
-                [255, 165, 0],    # Orange
-                [106, 90, 205]    # Slate blue
+            # Background colors
+            bg_colors = [
+                (30, 60, 90),    # Dark blue
+                (40, 80, 120),   # Medium blue  
+                (50, 100, 150),  # Light blue
+                (60, 120, 180),  # Sky blue
+                (70, 140, 210)   # Bright blue
             ]
             
-            bg_color = colors[variation % len(colors)]
-            img[:, :] = bg_color
+            img[:, :] = bg_colors[variation % len(bg_colors)]
+            
+            # Add gradient effect
+            for i in range(height):
+                alpha = i / height
+                img[i, :] = img[i, :] * (1 - alpha * 0.3) + np.array([10, 20, 30]) * (alpha * 0.3)
+            
+            # Draw bird illustration
+            self.draw_bird_illustration(img, species_name, variation, width, height)
             
             # Add text
             font = cv2.FONT_HERSHEY_SIMPLEX
-            text = species_name
-            text_size = cv2.getTextSize(text, font, 0.8, 2)[0]
-            text_x = (600 - text_size[0]) // 2
-            text_y = (400 + text_size[1]) // 2
+            text_color = (255, 255, 255)
             
-            cv2.putText(img, text, (text_x, text_y), font, 0.8, (255, 255, 255), 2)
-            cv2.putText(img, f"Bird Image {variation + 1}", (200, 250), font, 0.6, (200, 200, 200), 1)
-            cv2.putText(img, "Uganda Bird Spotter", (180, 300), font, 0.5, (220, 220, 220), 1)
+            # Species name
+            cv2.putText(img, species_name, (width//2 - 150, 100), font, 1.2, text_color, 2)
             
-            # Add simple bird shape
-            center_x, center_y = 300, 150
-            cv2.ellipse(img, (center_x, center_y), (40, 25), 0, 0, 360, (255, 255, 255), -1)
-            cv2.ellipse(img, (center_x, center_y - 20), (20, 20), 0, 0, 360, (255, 255, 255), -1)
+            # Decorative elements
+            cv2.putText(img, "•", (width//2 - 10, 130), font, 1, text_color, 2)
+            
+            # Information text
+            info_lines = [
+                "Uganda Bird Spotter",
+                "Professional Wildlife Documentation",
+                f"Image {variation + 1} of 5"
+            ]
+            
+            for i, line in enumerate(info_lines):
+                cv2.putText(img, line, (width//2 - 180, 180 + i * 30), font, 0.6, text_color, 1)
+            
+            # Add border
+            cv2.rectangle(img, (10, 10), (width-10, height-10), text_color, 2)
             
             cv2.imwrite(output_path, img)
             return True
+            
         except Exception as e:
-            st.error(f"❌ Error creating placeholder: {e}")
+            st.error(f"❌ Error creating professional placeholder: {e}")
             return False
 
+    def draw_bird_illustration(self, img, species_name, variation, width, height):
+        """Draw a bird illustration based on species"""
+        center_x, center_y = width // 2, height // 2 + 50
+        
+        # Different bird poses based on variation
+        poses = [
+            {"body_size": (60, 35), "head_size": 25, "wing_angle": 20, "tail_length": 30},
+            {"body_size": (55, 30), "head_size": 22, "wing_angle": -15, "tail_length": 25},
+            {"body_size": (65, 40), "head_size": 28, "wing_angle": 10, "tail_length": 35},
+            {"body_size": (50, 28), "head_size": 20, "wing_angle": -20, "tail_length": 22},
+            {"body_size": (70, 45), "head_size": 30, "wing_angle": 25, "tail_length": 40}
+        ]
+        
+        pose = poses[variation % len(poses)]
+        body_w, body_h = pose["body_size"]
+        head_size = pose["head_size"]
+        wing_angle = pose["wing_angle"]
+        tail_length = pose["tail_length"]
+        
+        # Bird color based on species
+        species_colors = {
+            "African Fish Eagle": (200, 200, 100),
+            "Grey Crowned Crane": (150, 150, 150),
+            "Shoebill Stork": (120, 120, 80),
+            "Lilac-breasted Roller": (180, 120, 220),
+            "Great Blue Turaco": (80, 120, 200)
+        }
+        
+        bird_color = species_colors.get(species_name, (150, 150, 150))
+        
+        # Draw body
+        cv2.ellipse(img, (center_x, center_y), (body_w, body_h), 0, 0, 360, bird_color, -1)
+        
+        # Draw head
+        cv2.ellipse(img, (center_x, center_y - body_h), (head_size, head_size), 0, 0, 360, bird_color, -1)
+        
+        # Draw beak
+        cv2.ellipse(img, (center_x, center_y - body_h), (head_size//2, head_size//4), 0, 0, 360, (50, 50, 30), -1)
+        
+        # Draw wings
+        wing_color = tuple(max(0, c - 30) for c in bird_color)
+        left_wing_points = np.array([
+            [center_x - body_w//2, center_y],
+            [center_x - body_w - 20, center_y - wing_angle],
+            [center_x - body_w//2, center_y - body_h//2]
+        ], np.int32)
+        
+        right_wing_points = np.array([
+            [center_x + body_w//2, center_y],
+            [center_x + body_w + 20, center_y - wing_angle],
+            [center_x + body_w//2, center_y - body_h//2]
+        ], np.int32)
+        
+        cv2.fillPoly(img, [left_wing_points], wing_color)
+        cv2.fillPoly(img, [right_wing_points], wing_color)
+        
+        # Draw tail
+        tail_points = np.array([
+            [center_x, center_y + body_h//2],
+            [center_x - tail_length//2, center_y + body_h//2 + tail_length],
+            [center_x + tail_length//2, center_y + body_h//2 + tail_length]
+        ], np.int32)
+        cv2.fillPoly(img, [tail_points], bird_color)
+
     def generate_story_video(self, species_name):
-        """Generate a comprehensive story-based video with audio using the loaded model"""
+        """Generate a comprehensive story-based video with audio"""
         try:
             if not self.model_loaded or self.story_generator is None:
                 st.error("❌ Story generation model not loaded")
@@ -590,17 +688,17 @@ class AdvancedVideoGenerator:
                 return None, None, None
             
             # Get bird images
-            st.info("🖼️ Creating bird images...")
+            st.info("🖼️ Creating professional bird images...")
             bird_images = self.get_bird_images(species_name, max_images=5)
             
             if not bird_images:
                 st.error("❌ No bird images created")
                 return None, None, None
             
-            # Generate video
-            st.info("🎬 Creating story video...")
+            # Generate video using OpenCV
+            st.info("🎬 Creating professional story video...")
             video_file = f"temp_story_video_{species_name.replace(' ', '_')}.mp4"
-            video_path = self.create_final_video(bird_images, audio_path, video_file)
+            video_path = self.create_story_video_with_opencv(bird_images, audio_path, video_file, story_text)
             
             # Clean up temporary audio file
             try:
@@ -609,8 +707,9 @@ class AdvancedVideoGenerator:
             except:
                 pass
             
-            if video_path:
-                st.success(f"✅ Story video generated successfully! ({len(bird_images)} images, {len(story_text.split())} words)")
+            if video_path and os.path.exists(video_path):
+                st.success(f"✅ Professional story video generated successfully!")
+                st.info(f"📊 Video details: {len(bird_images)} images, {len(story_text.split())} words, {os.path.getsize(video_path) // (1024*1024)}MB")
                 return video_path, story_text, bird_images
             else:
                 st.error("❌ Failed to generate video")
@@ -1036,10 +1135,7 @@ def main():
         if video_generator.model_loaded:
             st.success("🎬 AI Story Model: **Loaded**")
             st.info("📖 Generates: Stories + Audio + Video")
-            if not video_generator.moviepy_available:
-                st.warning("🎥 Using OpenCV video creation")
-            else:
-                st.success("🎥 Using MoviePy (Ken Burns effect)")
+            st.success("🎥 Using: OpenCV Professional Video Engine")
         else:
             st.warning("🎬 AI Story Model: **Not Available**")
     
@@ -1063,9 +1159,9 @@ def main():
         st.markdown("""
         <div class="glass-card">
             <strong>🦜 Welcome to Uganda Bird Spotter!</strong><br>
-            This app uses AI models for bird identification and story generation. 
+            This app uses AI models for bird identification and professional story generation. 
             Upload bird photos for identification, then generate AI-powered educational story videos 
-            with narrated audio and beautiful visual effects.
+            with narrated audio and professional visual effects.
         </div>
         """, unsafe_allow_html=True)
     else:
@@ -1232,15 +1328,16 @@ def main():
     if video_generator.model_loaded:
         st.markdown(f"""
         <div class="video-section">
-            <strong>📖 AI Story Generation with Video</strong><br>
+            <strong>📖 AI Story Generation with Professional Video</strong><br>
             Generate complete educational story videos using our advanced AI model. Each video includes:
             <br><br>
             • <strong>AI-Generated Story</strong>: Unique educational narrative about the bird<br>
             • <strong>Text-to-Speech Audio</strong>: Professional narration of the story<br>
-            • <strong>Visual Effects</strong>: Beautiful image transitions and effects<br>
-            • <strong>Multiple Images</strong>: Showcases the bird from different angles<br>
+            • <strong>Professional Visuals</strong>: High-quality bird illustrations and animations<br>
+            • <strong>Story Text Overlay</strong>: Animated text display synchronized with audio<br>
+            • <strong>Progress Tracking</strong>: Visual progress indicator<br>
             <br>
-            <strong>Video Engine:</strong> {'MoviePy with Ken Burns effect' if video_generator.moviepy_available else 'OpenCV slideshow'}
+            <strong>Video Engine:</strong> OpenCV Professional Video Creation
         </div>
         """, unsafe_allow_html=True)
     else:
@@ -1260,13 +1357,13 @@ def main():
         if st.session_state.get('selected_species_for_video'):
             st.info(f"🦜 Detected Species: **{st.session_state.selected_species_for_video}**")
             if st.button("🎬 Generate Story Video", use_container_width=True, type="primary"):
-                with st.spinner("Creating AI story video with audio..."):
+                with st.spinner("Creating professional AI story video..."):
                     video_path, story_text, used_images = video_generator.generate_video(st.session_state.selected_species_for_video)
                     if video_path:
                         st.session_state.generated_video_path = video_path
                         st.session_state.generated_story = story_text
                         st.session_state.used_images = used_images
-                        st.success("✅ AI story video generated successfully!")
+                        st.success("✅ Professional story video generated successfully!")
                     else:
                         st.error("❌ Failed to generate story video")
     
@@ -1281,14 +1378,14 @@ def main():
         )
         
         if st.button("🎬 Generate Video for Selected Bird", use_container_width=True, type="primary"):
-            with st.spinner("Creating AI story video with audio..."):
+            with st.spinner("Creating professional AI story video..."):
                 video_path, story_text, used_images = video_generator.generate_video(manual_species)
                 if video_path:
                     st.session_state.generated_video_path = video_path
                     st.session_state.generated_story = story_text
                     st.session_state.used_images = used_images
                     st.session_state.selected_species_for_video = manual_species
-                    st.success("✅ AI story video generated successfully!")
+                    st.success("✅ Professional story video generated successfully!")
                 else:
                     st.error("❌ Failed to generate story video")
     
@@ -1303,12 +1400,12 @@ def main():
         
         # Display used images
         if st.session_state.get('used_images'):
-            st.markdown(f"**🖼️ Used {len(st.session_state.used_images)} images in the video:**")
+            st.markdown(f"**🖼️ Professional Bird Illustrations ({len(st.session_state.used_images)} images):**")
             cols = st.columns(min(3, len(st.session_state.used_images)))
             for idx, img_path in enumerate(st.session_state.used_images):
                 with cols[idx % 3]:
                     try:
-                        st.image(img_path, use_column_width=True)
+                        st.image(img_path, use_column_width=True, caption=f"Illustration {idx+1}")
                     except:
                         st.info(f"Image {idx+1}")
         
@@ -1320,8 +1417,8 @@ def main():
             st.video(video_bytes)
             
             # Video information
-            video_type = "MoviePy with Ken Burns" if video_generator.moviepy_available else "OpenCV slideshow"
-            st.info(f"**Video Details:** {st.session_state.selected_species_for_video} | {video_type} | Audio Narration")
+            file_size = os.path.getsize(st.session_state.generated_video_path) // (1024 * 1024)
+            st.info(f"**Video Details:** {st.session_state.selected_species_for_video} | Professional OpenCV Video | {file_size}MB | Audio Narration")
             
             # Download buttons
             col1, col2 = st.columns(2)
