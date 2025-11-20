@@ -235,51 +235,49 @@ class BirdStoryGenerator:
         tmpl = random.choice(self.templates)
         return tmpl.format(name=name, color_phrase=color_phrase, desc=desc)
 
-# ========== ENHANCED FILE DOWNLOADER ==========
+# ========== ENHANCED FILE DOWNLOADER WITH GDOWN ==========
+def install_gdown():
+    """Install gdown if not available"""
+    try:
+        import gdown
+        return True
+    except ImportError:
+        st.warning("📦 gdown not available. Installing...")
+        try:
+            import subprocess
+            import sys
+            subprocess.check_call([sys.executable, "-m", "pip", "install", "gdown"])
+            import gdown
+            st.success("✅ gdown installed successfully!")
+            return True
+        except Exception as e:
+            st.error(f"❌ Failed to install gdown: {e}")
+            return False
+
 def download_file_from_gdrive(file_id, destination):
-    """Download file from Google Drive with enhanced error handling"""
+    """Download file from Google Drive using gdown"""
     try:
         if not os.path.exists(destination):
             st.info(f"📥 Downloading {os.path.basename(destination)} from Google Drive...")
             
-            # Method 1: Using gdown (most reliable)
-            try:
+            # Install and use gdown
+            if install_gdown():
                 import gdown
                 url = f'https://drive.google.com/uc?id={file_id}'
-                gdown.download(url, destination, quiet=False)
-                if os.path.exists(destination):
-                    file_size = os.path.getsize(destination) / (1024 * 1024)
-                    st.success(f"✅ Downloaded {os.path.basename(destination)} successfully! ({file_size:.1f} MB)")
-                    return True
-                else:
-                    st.error(f"❌ Download failed for {os.path.basename(destination)}")
-                    return False
-                    
-            except ImportError:
-                st.warning("gdown not available, trying direct download...")
-                # Method 2: Direct download
-                url = f"https://drive.google.com/uc?export=download&id={file_id}"
-                response = requests.get(url, stream=True)
                 
-                # Handle large file downloads
-                total_size = int(response.headers.get('content-length', 0))
-                block_size = 8192
-                
+                # Create progress bar
                 progress_bar = st.progress(0)
                 status_text = st.empty()
                 
-                with open(destination, 'wb') as f:
-                    downloaded = 0
-                    for chunk in response.iter_content(chunk_size=block_size):
-                        if chunk:
-                            f.write(chunk)
-                            downloaded += len(chunk)
-                            if total_size > 0:
-                                progress = min(downloaded / total_size, 1.0)
-                                progress_bar.progress(progress)
-                                status_text.text(f"Downloaded: {downloaded/(1024*1024):.1f} MB / {total_size/(1024*1024):.1f} MB")
+                def progress_hook(current, total, width=80):
+                    percent = current / total
+                    progress_bar.progress(percent)
+                    status_text.text(f"Downloaded: {current/(1024*1024):.1f} MB / {total/(1024*1024):.1f} MB")
                 
-                progress_bar.empty()
+                # Download with progress
+                gdown.download(url, destination, quiet=False, fuzzy=True)
+                
+                progress_bar.progress(1.0)
                 status_text.empty()
                 
                 if os.path.exists(destination):
@@ -289,6 +287,9 @@ def download_file_from_gdrive(file_id, destination):
                 else:
                     st.error(f"❌ Download failed for {os.path.basename(destination)}")
                     return False
+            else:
+                st.error("❌ gdown installation failed")
+                return False
         
         # If file already exists
         if os.path.exists(destination):
@@ -311,20 +312,28 @@ def download_file_from_gdrive(file_id, destination):
 # ========== BIRD DATA LOADING ==========
 @st.cache_resource
 def load_bird_data():
-    """Load bird data with enhanced error handling"""
-    pth_path = "bird_data.pth"
+    """Load bird data with multiple location support"""
+    possible_paths = [
+        "bird_data.pth",
+        "./models/bird_data.pth",
+        "./data/bird_data.pth",
+        "./bird_data/bird_data.pth",
+        "/content/bird_data.pth"  # For Google Colab
+    ]
     
-    if not os.path.exists(pth_path):
-        st.warning(f"bird_data.pth not found. Please ensure it's in the app directory.")
-        return {}
+    for pth_path in possible_paths:
+        if os.path.exists(pth_path):
+            try:
+                bird_data = torch.load(pth_path, map_location="cpu")
+                st.success(f"✅ Loaded bird data from {pth_path} with {len(bird_data)} species")
+                return bird_data
+            except Exception as e:
+                st.error(f"Error loading bird data from {pth_path}: {e}")
+                continue
     
-    try:
-        bird_data = torch.load(pth_path, map_location="cpu")
-        st.success(f"✅ Loaded bird data with {len(bird_data)} species")
-        return bird_data
-    except Exception as e:
-        st.error(f"Error loading bird data: {e}")
-        return {}
+    # If not found, try to download
+    st.warning("bird_data.pth not found in standard locations. Please ensure it's in the app directory.")
+    return {}
 
 # Load bird data at startup
 bird_db = load_bird_data()
@@ -332,12 +341,30 @@ bird_db = load_bird_data()
 # ========== VIDEO MODEL LOADING ==========
 @st.cache_resource
 def load_video_model():
-    """Load video model with download from Google Drive"""
-    pth_path = "bird_path.pth"
-    file_id = "1J9T5r5TboWzvqAPQHmfvQmozor_wmmPz"  # From your Google Drive link
+    """Load video model with download from Google Drive and multiple location support"""
+    # Define possible locations for bird_path.pth
+    possible_paths = [
+        "bird_path.pth",
+        "./models/bird_path.pth", 
+        "./data/bird_path.pth",
+        "./bird_data/bird_path.pth",
+        "/content/bird_path.pth"  # For Google Colab
+    ]
     
-    # Download the file if it doesn't exist
-    if not os.path.exists(pth_path):
+    # First check if file exists in any location
+    pth_path = None
+    for path in possible_paths:
+        if os.path.exists(path):
+            pth_path = path
+            st.info(f"📁 Found bird_path.pth at: {path}")
+            break
+    
+    # If not found, download it
+    if pth_path is None:
+        st.info("🔍 bird_path.pth not found in standard locations. Downloading...")
+        pth_path = "bird_path.pth"  # Default download location
+        file_id = "1J9T5r5TboWzvqAPQHmfvQmozor_wmmPz"  # From your Google Drive link
+        
         success = download_file_from_gdrive(file_id, pth_path)
         if not success:
             st.warning("❌ Could not download bird_path.pth. Using default story generation.")
@@ -345,7 +372,7 @@ def load_video_model():
     
     try:
         model_data = torch.load(pth_path, map_location="cpu")
-        st.success("✅ Video story model loaded successfully!")
+        st.success(f"✅ Video story model loaded successfully from {pth_path}!")
         
         # Display information about loaded model data
         if isinstance(model_data, dict):
@@ -356,7 +383,7 @@ def load_video_model():
             
         return model_data
     except Exception as e:
-        st.warning(f"❌ Error loading video model: {e}. Using default story generation.")
+        st.warning(f"❌ Error loading video model from {pth_path}: {e}. Using default story generation.")
         return None
 
 # Load video model at startup
