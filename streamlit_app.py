@@ -20,25 +20,34 @@ import sys
 import importlib
 warnings.filterwarnings('ignore')
 
-# ========== FORCE MOVIEPY AVAILABILITY ==========
+# ========== ENHANCED MOVIEPY AVAILABILITY ==========
 def ensure_moviepy_available():
     """Ensure MoviePy is available by installing it if necessary"""
     try:
-        # Try to import MoviePy
+        # Try to import MoviePy first
+        import moviepy
         from moviepy.editor import (
             AudioFileClip, ImageClip, concatenate_videoclips,
             VideoFileClip, concatenate_audioclips
         )
         from moviepy.audio.fx.all import audio_fadein, audio_fadeout
         from moviepy.video.fx.all import resize
+        st.success("✅ MoviePy is already installed and available!")
         return True
     except ImportError:
         # MoviePy not available, try to install it
         try:
             st.warning("🎬 MoviePy not found. Installing MoviePy and dependencies...")
             
-            # Install required packages
-            packages = ["moviepy", "decorator", "proglog", "imageio", "imageio-ffmpeg"]
+            # Install required packages with specific versions for compatibility
+            packages = [
+                "moviepy==1.0.3",
+                "decorator==5.1.1", 
+                "proglog==0.1.10",
+                "imageio==2.31.1",
+                "imageio-ffmpeg==0.4.9",
+                "numpy<2.0"  # Ensure numpy compatibility
+            ]
             
             for package in packages:
                 try:
@@ -50,7 +59,11 @@ def ensure_moviepy_available():
                 except Exception as e:
                     st.warning(f"⚠️ Could not install {package}: {e}")
             
-            # Try to import again
+            # Try to import again after installation
+            import importlib
+            importlib.invalidate_caches()
+            
+            # Test the imports
             from moviepy.editor import (
                 AudioFileClip, ImageClip, concatenate_videoclips,
                 VideoFileClip, concatenate_audioclips
@@ -58,25 +71,37 @@ def ensure_moviepy_available():
             from moviepy.audio.fx.all import audio_fadein, audio_fadeout
             from moviepy.video.fx.all import resize
             
-            st.success("✅ MoviePy installed successfully!")
+            st.success("✅ MoviePy installed and imported successfully!")
             return True
             
         except Exception as e:
             st.error(f"❌ MoviePy installation failed: {e}")
-            st.info("Please install manually: pip install moviepy decorator proglog imageio imageio-ffmpeg")
+            st.info("""
+            🔧 **Manual Installation Required:**
+            Please run this command in your terminal:
+            ```
+            pip install moviepy decorator proglog imageio imageio-ffmpeg
+            ```
+            Then restart the app.
+            """)
             return False
 
 # Ensure MoviePy is available at startup
 MOVIEPY_AVAILABLE = ensure_moviepy_available()
 
 if MOVIEPY_AVAILABLE:
-    # Import MoviePy components
-    from moviepy.editor import (
-        AudioFileClip, ImageClip, concatenate_videoclips,
-        VideoFileClip, concatenate_audioclips
-    )
-    from moviepy.audio.fx.all import audio_fadein, audio_fadeout
-    from moviepy.video.fx.all import resize
+    try:
+        # Import MoviePy components
+        from moviepy.editor import (
+            AudioFileClip, ImageClip, concatenate_videoclips,
+            VideoFileClip, concatenate_audioclips
+        )
+        from moviepy.audio.fx.all import audio_fadein, audio_fadeout
+        from moviepy.video.fx.all import resize
+        st.success("✅ MoviePy components imported successfully!")
+    except Exception as e:
+        st.error(f"❌ Error importing MoviePy components: {e}")
+        MOVIEPY_AVAILABLE = False
 else:
     st.error("❌ CRITICAL: MoviePy is required but not available. The app cannot continue.")
     st.stop()
@@ -522,51 +547,6 @@ class AdvancedVideoGenerator:
             return filename
         except Exception as e:
             st.error(f"❌ Error generating speech: {e}")
-            return None
-
-    def create_slideshow_video_opencv(self, images, audio_path, output_path):
-        """Create slideshow video using OpenCV (only if MoviePy fails)"""
-        try:
-            # Get audio duration
-            try:
-                import librosa
-                audio_duration = librosa.get_duration(filename=audio_path)
-            except:
-                audio_duration = 15  # Fallback duration
-            
-            # Video properties
-            frame_width = 1280
-            frame_height = 720
-            fps = 24
-            total_frames = int(audio_duration * fps)
-            frames_per_image = max(1, total_frames // len(images)) if images else total_frames
-            
-            # Initialize video writer
-            fourcc = cv2.VideoWriter_fourcc(*'mp4v')
-            out = cv2.VideoWriter(output_path, fourcc, fps, (frame_width, frame_height))
-            
-            # Create frames
-            for frame_num in range(total_frames):
-                img_idx = min(len(images) - 1, frame_num // frames_per_image)
-                img_path = images[img_idx]
-                
-                # Load and resize image
-                img = cv2.imread(img_path)
-                if img is not None:
-                    img = cv2.resize(img, (frame_width, frame_height))
-                    out.write(img)
-                else:
-                    # Create placeholder frame if image loading fails
-                    frame = np.zeros((frame_height, frame_width, 3), dtype=np.uint8)
-                    cv2.putText(frame, "Bird Image", (frame_width//2 - 100, frame_height//2), 
-                               cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
-                    out.write(frame)
-            
-            out.release()
-            return output_path
-            
-        except Exception as e:
-            st.error(f"❌ OpenCV video creation error: {e}")
             return None
 
     def create_final_video(self, images, audio_path, output_path):
