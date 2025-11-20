@@ -12,3 +12,11 @@ moviepy>=1.0.0
 decorator>=5.1.0
 proglog>=0.1.9
 librosa>=0.9.0
+streamlit
+numpy
+pillow
+opencv-python
+torch
+torchvision
+gtts
+moviepy
