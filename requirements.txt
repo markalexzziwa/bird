@@ -10,3 +10,4 @@ gtts>=2.2.0
 moviepy>=1.0.3
 imageio>=2.9.0
 imageio-ffmpeg>=0.4.5
+requests>=2.25.0
