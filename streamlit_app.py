@@ -15,11 +15,9 @@ import torch
 import torch.nn as nn
 from gtts import gTTS
 import warnings
-import subprocess
-import sys
 warnings.filterwarnings('ignore')
 
-# Force install and import MoviePy
+# Try to import moviepy with fallback
 try:
     from moviepy.editor import (
         AudioFileClip, ImageClip, concatenate_videoclips,
@@ -29,28 +27,8 @@ try:
     from moviepy.video.fx.all import resize
     MOVIEPY_AVAILABLE = True
 except ImportError:
-    # Try to install moviepy automatically
-    try:
-        st.warning("🎬 MoviePy not found. Installing now...")
-        
-        # Install moviepy and dependencies
-        subprocess.check_call([sys.executable, "-m", "pip", "install", "moviepy", "decorator", "proglog"])
-        
-        # Try to import again after installation
-        from moviepy.editor import (
-            AudioFileClip, ImageClip, concatenate_videoclips,
-            VideoFileClip, concatenate_audioclips
-        )
-        from moviepy.audio.fx.all import audio_fadein, audio_fadeout
-        from moviepy.video.fx.all import resize
-        
-        MOVIEPY_AVAILABLE = True
-        st.success("✅ MoviePy installed successfully!")
-        
-    except Exception as e:
-        MOVIEPY_AVAILABLE = False
-        st.error(f"❌ MoviePy installation failed: {e}")
-        st.info("Please install manually: pip install moviepy decorator proglog")
+    MOVIEPY_AVAILABLE = False
+    st.warning("🎬 MoviePy not available. Video creation will use OpenCV fallback.")
 
 # Set page configuration
 st.set_page_config(
@@ -214,14 +192,10 @@ class BirdStoryGenerator:
         tmpl = random.choice(self.templates)
         return tmpl.format(name=name, color_phrase=color_phrase, desc=desc)
 
-# ========== ENHANCED FILE DOWNLOADER ==========
+# ========== SIMPLE FILE DOWNLOADER ==========
 def download_file_from_gdrive(file_id, destination):
-    """Download file from Google Drive with enhanced error handling"""
+    """Download file from Google Drive"""
     try:
-        # Remove existing file if it's too small (corrupted)
-        if os.path.exists(destination) and os.path.getsize(destination) < 1000:
-            os.remove(destination)
-            
         if not os.path.exists(destination):
             st.info(f"📥 Downloading {os.path.basename(destination)} from Google Drive...")
             
@@ -230,182 +204,109 @@ def download_file_from_gdrive(file_id, destination):
                 import gdown
                 url = f'https://drive.google.com/uc?id={file_id}'
                 gdown.download(url, destination, quiet=False)
+                st.success(f"✅ Downloaded {os.path.basename(destination)} successfully!")
+                return True
                 
             except ImportError:
-                # Method 2: Using requests
-                try:
-                    session = requests.Session()
-                    url = f"https://docs.google.com/uc?export=download&id={file_id}"
-                    response = session.get(url, stream=True)
-                    
-                    # Handle confirmation for large files
-                    for key, value in response.cookies.items():
-                        if key.startswith('download_warning'):
-                            params = {'confirm': value}
-                            response = session.get(url, params=params, stream=True)
-                            break
-                    
-                    # Download with progress
-                    total_size = int(response.headers.get('content-length', 0))
-                    block_size = 8192
-                    progress_bar = st.progress(0)
-                    status_text = st.empty()
-                    
-                    with open(destination, 'wb') as f:
-                        downloaded = 0
-                        for chunk in response.iter_content(chunk_size=32768):
-                            if chunk:
-                                f.write(chunk)
-                                downloaded += len(chunk)
-                                if total_size > 0:
-                                    progress = min(downloaded / total_size, 1.0)
-                                    progress_bar.progress(progress)
-                                    status_text.text(f"Downloaded: {downloaded/(1024*1024):.1f} MB / {total_size/(1024*1024):.1f} MB")
-                    
-                    progress_bar.empty()
-                    status_text.empty()
-                    
-                except Exception as e:
-                    st.error(f"❌ Requests download failed: {e}")
-                    return False
-            
-            # Verify download
-            if os.path.exists(destination) and os.path.getsize(destination) > 1000:
-                file_size = os.path.getsize(destination) / (1024 * 1024)
-                st.success(f"✅ Downloaded {os.path.basename(destination)} ({file_size:.1f} MB)")
+                st.warning("gdown not available, trying requests...")
+                # Method 2: Using requests with cookie handling
+                session = requests.Session()
+                
+                # First, get the confirmation token
+                url = f"https://docs.google.com/uc?export=download&id={file_id}"
+                response = session.get(url, stream=True)
+                
+                # Check for download confirmation
+                for key, value in response.cookies.items():
+                    if key.startswith('download_warning'):
+                        # Need to confirm the download
+                        params = {'confirm': value, 'id': file_id}
+                        response = session.get(url, params=params, stream=True)
+                        break
+                
+                # Download with progress
+                total_size = int(response.headers.get('content-length', 0))
+                block_size = 8192
+                progress_bar = st.progress(0)
+                status_text = st.empty()
+                
+                with open(destination, 'wb') as f:
+                    downloaded = 0
+                    for chunk in response.iter_content(chunk_size=block_size):
+                        if chunk:
+                            f.write(chunk)
+                            downloaded += len(chunk)
+                            if total_size > 0:
+                                progress = min(downloaded / total_size, 1.0)
+                                progress_bar.progress(progress)
+                                status_text.text(f"Downloaded: {downloaded/(1024*1024):.1f} MB / {total_size/(1024*1024):.1f} MB")
+                
+                progress_bar.empty()
+                status_text.empty()
+                st.success(f"✅ Downloaded {os.path.basename(destination)} successfully!")
                 return True
-            else:
-                if os.path.exists(destination):
-                    os.remove(destination)
-                st.error(f"❌ Downloaded file is too small or corrupted: {os.path.basename(destination)}")
-                return False
         
         # If file already exists
         if os.path.exists(destination):
             file_size = os.path.getsize(destination) / (1024 * 1024)
-            if file_size > 0.1:
-                st.info(f"✅ {os.path.basename(destination)} already exists ({file_size:.1f} MB)")
+            if file_size > 0.1:  # Ensure file is not empty/corrupted
                 return True
             else:
+                st.error(f"❌ {os.path.basename(destination)} is too small - may be corrupted")
                 os.remove(destination)
                 return False
-                
+        else:
+            st.error(f"❌ Failed to download {os.path.basename(destination)}")
+            return False
+            
     except Exception as e:
         st.error(f"❌ Download error for {os.path.basename(destination)}: {e}")
         return False
-    
-    return True
 
-# ========== BIRD DATA LOADING WITH DOWNLOAD ==========
+# ========== BIRD DATA LOADING ==========
 @st.cache_resource
 def load_bird_data():
-    """Load bird data with download from Google Drive"""
+    """Load bird data"""
     pth_path = "bird_data.pth"
     
-    # If bird_data.pth doesn't exist, download it
     if not os.path.exists(pth_path):
-        st.info("📥 Downloading bird_data.pth from Google Drive...")
-        
-        # Try multiple possible file IDs for bird_data.pth
-        possible_file_ids = [
-            "1J9T5r5TboWzvqAPQHmfvQmozor_wmmPz",  # Your bird_path.pth ID
-            "1yfiYcz6e2hWtQTXW6AZVU-iwSUjDP92y",  # Your resnet model ID
-        ]
-        
-        success = False
-        for file_id in possible_file_ids:
-            st.info(f"🔄 Trying file ID: {file_id}...")
-            success = download_file_from_gdrive(file_id, pth_path)
-            if success:
-                st.success("✅ bird_data.pth downloaded successfully!")
-                break
-            else:
-                st.warning(f"❌ Failed with file ID: {file_id}")
-        
-        if not success:
-            st.error("❌ Could not download bird_data.pth from any source.")
-            st.info("🔄 Creating minimal bird data for testing...")
-            return create_minimal_bird_data()
+        st.warning(f"bird_data.pth not found. Please ensure it's in the app directory.")
+        return {}
     
     try:
         bird_data = torch.load(pth_path, map_location="cpu")
-        if isinstance(bird_data, dict) and len(bird_data) > 0:
-            st.success(f"✅ Loaded bird data with {len(bird_data)} species")
-            return bird_data
-        else:
-            st.error("❌ bird_data.pth is empty or invalid")
-            return create_minimal_bird_data()
+        st.success(f"✅ Loaded bird data with {len(bird_data)} species")
+        return bird_data
     except Exception as e:
-        st.error(f"❌ Error loading bird data: {e}")
-        return create_minimal_bird_data()
-
-def create_minimal_bird_data():
-    """Create minimal bird data if download fails"""
-    minimal_data = {
-        "African Fish Eagle": {
-            "desc": "A majestic bird of prey found near water bodies",
-            "colors": ["white", "brown", "black"],
-            "images_b64": []
-        },
-        "Grey Crowned Crane": {
-            "desc": "National bird of Uganda with golden crown",
-            "colors": ["grey", "white", "gold"],
-            "images_b64": []
-        },
-        "Shoebill Stork": {
-            "desc": "Large stork-like bird with shoe-shaped bill",
-            "colors": ["blue-grey", "white"],
-            "images_b64": []
-        },
-        "Lilac-breasted Roller": {
-            "desc": "Colorful bird with vibrant plumage",
-            "colors": ["lilac", "blue", "green", "brown"],
-            "images_b64": []
-        },
-        "Great Blue Turaco": {
-            "desc": "Large blue bird with distinctive crest",
-            "colors": ["blue", "green", "red"],
-            "images_b64": []
-        }
-    }
-    st.warning("⚠️ Using minimal bird data for testing")
-    return minimal_data
+        st.error(f"Error loading bird data: {e}")
+        return {}
 
 # Load bird data at startup
 bird_db = load_bird_data()
 
-# ========== VIDEO MODEL LOADING - NO ALTERNATIVES ==========
+# ========== VIDEO MODEL LOADING ==========
 @st.cache_resource
 def load_video_model():
-    """Load video model with download from Google Drive - NO FALLBACKS"""
+    """Load video model with download from Google Drive"""
     pth_path = "bird_path.pth"
     file_id = "1J9T5r5TboWzvqAPQHmfvQmozor_wmmPz"  # From your Google Drive link
     
     # Download the file if it doesn't exist
     if not os.path.exists(pth_path):
-        st.info("🔄 Downloading bird_path.pth from Google Drive...")
         success = download_file_from_gdrive(file_id, pth_path)
         if not success:
-            st.error("❌ CRITICAL: Could not download bird_path.pth. App cannot function without this file.")
-            st.stop()  # Stop the app completely
+            st.warning("❌ Could not download bird_path.pth. Using default story generation.")
+            return None
     
     try:
-        # Load the model
         model_data = torch.load(pth_path, map_location="cpu")
-        
-        # Verify it's a valid model
-        if model_data is None:
-            st.error("❌ CRITICAL: bird_path.pth is empty or corrupted.")
-            st.stop()
-            
         st.success("✅ Video story model loaded successfully!")
         return model_data
-        
     except Exception as e:
-        st.error(f"❌ CRITICAL: Error loading video model: {e}")
-        st.stop()
+        st.warning(f"❌ Error loading video model: {e}. Using default story generation.")
+        return None
 
-# Load video model at startup - THIS WILL STOP APP IF FAILS
+# Load video model at startup
 video_model_data = load_video_model()
 
 class AdvancedVideoGenerator:
@@ -415,29 +316,32 @@ class AdvancedVideoGenerator:
         self.video_duration = 20
         self.moviepy_available = MOVIEPY_AVAILABLE
         
-        # CRITICAL: Must use bird_path.pth - no alternatives
-        if video_model_data is None:
-            st.error("❌ CRITICAL: bird_path.pth not available. App cannot continue.")
-            st.stop()
-            
+        # Initialize story generator - ALWAYS have a fallback
         self.story_generator = self._initialize_story_generator()
         
     def _initialize_story_generator(self):
-        """Initialize story generator from bird_path.pth - NO FALLBACKS"""
-        try:
-            # Extract story generator from model data
-            if hasattr(video_model_data, 'generate_story'):
-                return video_model_data
-            elif isinstance(video_model_data, dict) and 'story_generator' in video_model_data:
-                return video_model_data['story_generator']
-            elif isinstance(video_model_data, dict) and 'templates' in video_model_data:
-                return BirdStoryGenerator(video_model_data['templates'])
-            else:
-                # If it's just the story generator itself
+        """Initialize story generator with proper fallbacks"""
+        if video_model_data is not None:
+            try:
+                # Try to extract story generator from model data
+                if hasattr(video_model_data, 'generate_story'):
+                    st.success("✅ Using advanced story generation model")
+                    return video_model_data
+                elif isinstance(video_model_data, dict) and 'story_generator' in video_model_data:
+                    st.success("✅ Using story generator from model data")
+                    return video_model_data['story_generator']
+                elif isinstance(video_model_data, dict) and 'templates' in video_model_data:
+                    st.success("✅ Using custom templates from model")
+                    return BirdStoryGenerator(video_model_data['templates'])
+                else:
+                    st.info("📖 Using enhanced story generation")
+                    return BirdStoryGenerator(TEMPLATES)
+            except Exception as e:
+                st.warning(f"⚠️ Could not load advanced model: {e}. Using default stories.")
                 return BirdStoryGenerator(TEMPLATES)
-        except Exception as e:
-            st.error(f"❌ CRITICAL: Could not initialize story generator from bird_path.pth: {e}")
-            st.stop()
+        else:
+            st.info("📖 Using default story generation")
+            return BirdStoryGenerator(TEMPLATES)
     
     def load_bird_data(self):
         """Load and process the bird species data from local CSV"""
@@ -497,7 +401,7 @@ class AdvancedVideoGenerator:
             return None
 
     def create_slideshow_video_opencv(self, images, audio_path, output_path):
-        """Create slideshow video using OpenCV (only if MoviePy fails)"""
+        """Create slideshow video using OpenCV (fallback when MoviePy not available)"""
         try:
             # Get audio duration
             try:
@@ -526,6 +430,11 @@ class AdvancedVideoGenerator:
                 img = cv2.imread(img_path)
                 if img is not None:
                     img = cv2.resize(img, (frame_width, frame_height))
+                    
+                    # Add text overlay
+                    text = "Uganda Bird Spotter"
+                    cv2.putText(img, text, (50, 50), cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
+                    
                     out.write(img)
                 else:
                     # Create placeholder frame if image loading fails
@@ -542,10 +451,10 @@ class AdvancedVideoGenerator:
             return None
 
     def create_final_video(self, images, audio_path, output_path):
-        """Create final video with Ken Burns effect and audio - FORCE MoviePy"""
-        if not self.moviepy_available:
-            st.error("❌ MoviePy is required but not available.")
-            return None
+        """Create final video with Ken Burns effect and audio"""
+        if not self.moviepy_available or len(images) == 0:
+            st.warning("🎬 Using OpenCV fallback for video creation")
+            return self.create_slideshow_video_opencv(images, audio_path, output_path)
         
         try:
             # Load and process audio
@@ -570,7 +479,7 @@ class AdvancedVideoGenerator:
                 try:
                     clip = ImageClip(img).set_duration(img_duration)
                     w, h = clip.size
-                    zoom = 1.1
+                    zoom = 1.1  # Reduced zoom for stability
                     
                     # Apply zoom effect
                     clip = clip.resize(lambda t: 1 + (zoom - 1) * (t / img_duration))
@@ -583,7 +492,7 @@ class AdvancedVideoGenerator:
 
             if not clips:
                 st.error("❌ No valid video clips created")
-                return None
+                return self.create_slideshow_video_opencv(images, audio_path, output_path)
 
             # Combine clips and audio
             video = concatenate_videoclips(clips, method="compose").set_audio(narration)
@@ -604,10 +513,11 @@ class AdvancedVideoGenerator:
             
         except Exception as e:
             st.error(f"❌ MoviePy video creation error: {e}")
-            return None
+            st.info("🔄 Falling back to OpenCV video creation...")
+            return self.create_slideshow_video_opencv(images, audio_path, output_path)
 
     def get_bird_images(self, species_name, max_images=5):
-        """Get bird images for the species"""
+        """Get bird images for the species - ALWAYS return some images"""
         try:
             # First try to get images from bird_db if available
             if species_name in bird_db and bird_db[species_name].get("images_b64"):
@@ -625,7 +535,7 @@ class AdvancedVideoGenerator:
                 if image_paths:
                     return image_paths
             
-            # Create placeholder images
+            # Fallback: Create placeholder images
             image_paths = []
             for i in range(max_images):
                 placeholder_path = f"./temp_placeholder_{species_name.replace(' ', '_')}_{i}.jpg"
@@ -682,8 +592,12 @@ class AdvancedVideoGenerator:
             return False
 
     def generate_story_video(self, species_name):
-        """Generate a comprehensive story-based video with audio - NO FALLBACKS"""
+        """Generate a comprehensive story-based video with audio"""
         try:
+            # Always generate a story - never fail here
+            if self.story_generator is None:
+                self.story_generator = BirdStoryGenerator(TEMPLATES)
+            
             # Get bird information
             bird_info = self.get_bird_video_info(species_name)
             
@@ -700,8 +614,8 @@ class AdvancedVideoGenerator:
                         colors = str(bird_info[col]).split(',')
                         break
             
-            # Generate story using the model from bird_path.pth
-            st.info("📖 Generating educational story using bird_path.pth model...")
+            # Generate story using the model
+            st.info("📖 Generating educational story...")
             story_text = self.story_generator(common_name, description, colors)
             
             # Display the generated story
@@ -716,16 +630,16 @@ class AdvancedVideoGenerator:
                 st.error("❌ Failed to generate audio")
                 return None, None, None
             
-            # Get bird images
+            # Get bird images - ALWAYS get images
             st.info("🖼️ Gathering bird images...")
-            bird_images = self.get_bird_images(species_name, max_images=3)
+            bird_images = self.get_bird_images(species_name, max_images=3)  # Reduced for stability
             
             if not bird_images:
                 st.error("❌ No bird images available")
                 return None, None, None
             
-            # Generate video - FORCE MoviePy
-            st.info("🎬 Creating story video with MoviePy...")
+            # Generate video
+            st.info("🎬 Creating story video...")
             video_file = f"temp_story_video_{species_name.replace(' ', '_')}.mp4"
             video_path = self.create_final_video(bird_images, audio_path, video_file)
             
@@ -737,7 +651,7 @@ class AdvancedVideoGenerator:
                 pass
             
             if video_path and os.path.exists(video_path):
-                st.success(f"✅ Story video generated successfully using bird_path.pth!")
+                st.success(f"✅ Story video generated successfully!")
                 return video_path, story_text, bird_images
             else:
                 st.error("❌ Failed to generate video file")
@@ -789,7 +703,6 @@ class ResNet34BirdModel:
             streamlit>=1.22.0
             pandas>=1.3.0
             gtts>=2.2.0
-            moviepy>=1.0.0
             ```
             """)
             return False
@@ -1015,7 +928,7 @@ def initialize_system():
                 st.session_state.model_loaded = True
                 st.session_state.system_initialized = True
                 st.success(f"✅ System ready! Can identify {len(st.session_state.bird_model.bird_species)} bird species")
-                st.success("🎬 Story video generation ready with bird_path.pth")
+                st.info("📖 Story video generation available")
             else:
                 st.error("❌ System initialization failed. Please check the requirements and internet connection.")
 
@@ -1062,12 +975,12 @@ def main():
         
         # Video model status
         st.markdown("---")
-        st.success("🎬 Story Video Generation: **bird_path.pth**")
-        st.info("📖 Powered by: Advanced AI Model")
-        if video_generator.moviepy_available:
-            st.success("🎥 Using MoviePy (Ken Burns effect)")
+        st.success("🎬 Story Video Generation: **Available**")
+        st.info("📖 Generates: Stories + Audio + Video")
+        if not video_generator.moviepy_available:
+            st.warning("🎥 Using OpenCV video creation")
         else:
-            st.error("❌ MoviePy not available")
+            st.success("🎥 Using MoviePy (Ken Burns effect)")
     
     # Main app content
     # Custom header with logo beside title
@@ -1090,7 +1003,7 @@ def main():
         <strong>🦜 Welcome to Uganda Bird Spotter!</strong><br>
         This app uses AI models for bird identification and story generation. 
         Upload bird photos for identification, then generate AI-powered educational story videos 
-        with narrated audio and beautiful visual effects using <strong>bird_path.pth</strong> model.
+        with narrated audio and beautiful visual effects.
     </div>
     """, unsafe_allow_html=True)
     
@@ -1244,19 +1157,19 @@ def main():
     
     # Story Video Generation Section
     st.markdown("---")
-    st.markdown('<div class="section-title">🎬 AI Story Video Generator (bird_path.pth)</div>', unsafe_allow_html=True)
+    st.markdown('<div class="section-title">🎬 AI Story Video Generator</div>', unsafe_allow_html=True)
     
     st.markdown(f"""
     <div class="video-section">
-        <strong>📖 AI Story Generation with Video using bird_path.pth</strong><br>
-        Generate complete educational story videos using the advanced bird_path.pth model. Each video includes:
+        <strong>📖 AI Story Generation with Video</strong><br>
+        Generate complete educational story videos. Each video includes:
         <br><br>
         • <strong>AI-Generated Story</strong>: Unique educational narrative about the bird<br>
         • <strong>Text-to-Speech Audio</strong>: Professional narration of the story<br>
         • <strong>Visual Effects</strong>: Beautiful image transitions and effects<br>
         • <strong>Multiple Images</strong>: Showcases the bird from different angles<br>
         <br>
-        <strong>Powered by:</strong> bird_path.pth AI Model
+        <strong>Video Engine:</strong> {'MoviePy with Ken Burns effect' if video_generator.moviepy_available else 'OpenCV slideshow'}
     </div>
     """, unsafe_allow_html=True)
     
@@ -1268,13 +1181,13 @@ def main():
         if st.session_state.get('selected_species_for_video'):
             st.info(f"🦜 Detected Species: **{st.session_state.selected_species_for_video}**")
             if st.button("🎬 Generate Story Video", use_container_width=True, type="primary"):
-                with st.spinner("Creating AI story video with bird_path.pth..."):
+                with st.spinner("Creating AI story video with audio..."):
                     video_path, story_text, used_images = video_generator.generate_video(st.session_state.selected_species_for_video)
                     if video_path:
                         st.session_state.generated_video_path = video_path
                         st.session_state.generated_story = story_text
                         st.session_state.used_images = used_images
-                        st.success("✅ AI story video generated successfully using bird_path.pth!")
+                        st.success("✅ AI story video generated successfully!")
                     else:
                         st.error("❌ Failed to generate story video")
     
@@ -1289,25 +1202,25 @@ def main():
         )
         
         if st.button("🎬 Generate Video for Selected Bird", use_container_width=True, type="primary"):
-            with st.spinner("Creating AI story video with bird_path.pth..."):
+            with st.spinner("Creating AI story video with audio..."):
                 video_path, story_text, used_images = video_generator.generate_video(manual_species)
                 if video_path:
                     st.session_state.generated_video_path = video_path
                     st.session_state.generated_story = story_text
                     st.session_state.used_images = used_images
                     st.session_state.selected_species_for_video = manual_species
-                    st.success("✅ AI story video generated successfully using bird_path.pth!")
+                    st.success("✅ AI story video generated successfully!")
                 else:
                     st.error("❌ Failed to generate story video")
     
     # Display generated story and video
     if st.session_state.get('generated_video_path') and os.path.exists(st.session_state.generated_video_path):
         st.markdown("---")
-        st.markdown("### 📖 AI-Generated Story Video (bird_path.pth)")
+        st.markdown("### 📖 AI-Generated Story Video")
         
         # Display the story
         if st.session_state.get('generated_story'):
-            st.markdown(f'<div class="story-box"><strong>📖 AI-Generated Story (bird_path.pth):</strong><br>{st.session_state.generated_story}</div>', unsafe_allow_html=True)
+            st.markdown(f'<div class="story-box"><strong>📖 AI-Generated Story:</strong><br>{st.session_state.generated_story}</div>', unsafe_allow_html=True)
         
         # Display used images
         if st.session_state.get('used_images'):
@@ -1328,7 +1241,8 @@ def main():
             st.video(video_bytes)
             
             # Video information
-            st.info(f"**Video Details:** {st.session_state.selected_species_for_video} | Powered by bird_path.pth | MoviePy Ken Burns effect")
+            video_type = "MoviePy with Ken Burns" if video_generator.moviepy_available else "OpenCV slideshow"
+            st.info(f"**Video Details:** {st.session_state.selected_species_for_video} | {video_type} | Audio Narration")
             
             # Download buttons
             col1, col2 = st.columns(2)
