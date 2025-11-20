@@ -20,45 +20,77 @@ import shutil
 from pathlib import Path
 warnings.filterwarnings('ignore')
 
-# ========== ENHANCED MOVIEPY CONFIGURATION ==========
-try:
-    from moviepy.editor import (
-        AudioFileClip, ImageClip, concatenate_videoclips,
-        VideoFileClip, concatenate_audioclips
-    )
-    from moviepy.audio.fx.all import audio_fadein, audio_fadeout
-    from moviepy.video.fx.all import resize
-    from moviepy.config import change_settings
-    
-    # Set ImageMagick path for TextClip support
+# ========== MOVIEPY INSTALLATION AND CONFIGURATION ==========
+def install_moviepy():
+    """Install MoviePy if not available"""
     try:
-        # Try to find ImageMagick binary
-        result = subprocess.run(['which', 'convert'], capture_output=True, text=True)
-        if result.returncode == 0:
-            imagemagick_path = result.stdout.strip()
-            os.environ["IMAGEMAGICK_BINARY"] = imagemagick_path
-            change_settings({"IMAGEMAGICK_BINARY": imagemagick_path})
-        else:
-            # Fallback paths
-            possible_paths = [
-                "/usr/bin/convert",
-                "/usr/local/bin/convert",
-                "/opt/homebrew/bin/convert",
-                "C:\\Program Files\\ImageMagick\\convert.exe"
-            ]
-            for path in possible_paths:
-                if os.path.exists(path):
-                    os.environ["IMAGEMAGICK_BINARY"] = path
-                    change_settings({"IMAGEMAGICK_BINARY": path})
-                    break
+        from moviepy.editor import (
+            AudioFileClip, ImageClip, concatenate_videoclips,
+            VideoFileClip, concatenate_audioclips
+        )
+        return True
+    except ImportError:
+        st.warning("🎬 MoviePy not available. Installing...")
+        try:
+            import subprocess
+            import sys
+            subprocess.check_call([sys.executable, "-m", "pip", "install", "moviepy", "imageio", "imageio-ffmpeg"])
+            st.success("✅ MoviePy installed successfully!")
+            
+            # Try importing again after installation
+            from moviepy.editor import (
+                AudioFileClip, ImageClip, concatenate_videoclips,
+                VideoFileClip, concatenate_audioclips
+            )
+            return True
+        except Exception as e:
+            st.error(f"❌ Failed to install MoviePy: {e}")
+            return False
+
+# Install and configure MoviePy
+MOVIEPY_AVAILABLE = install_moviepy()
+
+if MOVIEPY_AVAILABLE:
+    try:
+        from moviepy.editor import (
+            AudioFileClip, ImageClip, concatenate_videoclips,
+            VideoFileClip, concatenate_audioclips
+        )
+        from moviepy.audio.fx.all import audio_fadein, audio_fadeout
+        from moviepy.video.fx.all import resize
+        from moviepy.config import change_settings
+        
+        # Set ImageMagick path for TextClip support
+        try:
+            # Try to find ImageMagick binary
+            result = subprocess.run(['which', 'convert'], capture_output=True, text=True)
+            if result.returncode == 0:
+                imagemagick_path = result.stdout.strip()
+                os.environ["IMAGEMAGICK_BINARY"] = imagemagick_path
+                change_settings({"IMAGEMAGICK_BINARY": imagemagick_path})
+            else:
+                # Fallback paths
+                possible_paths = [
+                    "/usr/bin/convert",
+                    "/usr/local/bin/convert",
+                    "/opt/homebrew/bin/convert",
+                    "C:\\Program Files\\ImageMagick\\convert.exe"
+                ]
+                for path in possible_paths:
+                    if os.path.exists(path):
+                        os.environ["IMAGEMAGICK_BINARY"] = path
+                        change_settings({"IMAGEMAGICK_BINARY": path})
+                        break
+        except Exception as e:
+            st.warning(f"⚠️ ImageMagick configuration: {e}")
+        
+        st.success("✅ MoviePy fully configured!")
+        
     except Exception as e:
-        st.warning(f"⚠️ ImageMagick configuration: {e}")
-    
-    MOVIEPY_AVAILABLE = True
-    
-except ImportError as e:
-    MOVIEPY_AVAILABLE = False
-    st.warning(f"🎬 MoviePy not available: {e}. Video creation will use OpenCV fallback.")
+        st.error(f"❌ MoviePy configuration error: {e}")
+        MOVIEPY_AVAILABLE = False
+else:
+    st.error("❌ MoviePy is not available. Video creation features will be limited.")
 
 # Set page configuration
 st.set_page_config(
@@ -389,11 +421,14 @@ def load_video_model():
 # Load video model at startup
 video_model_data = load_video_model()
 
-# ========== ENHANCED VIDEO CREATION FUNCTIONS ==========
+# ========== MOVIEPY VIDEO CREATION FUNCTIONS ==========
 def ken_burns_effect(image_path, duration=4.0, zoom_direction="random"):
     """
-    Enhanced Ken Burns effect with multiple zoom directions
+    Enhanced Ken Burns effect with multiple zoom directions using MoviePy
     """
+    if not MOVIEPY_AVAILABLE:
+        return None
+        
     try:
         clip = ImageClip(image_path).set_duration(duration)
         w, h = clip.size
@@ -456,96 +491,26 @@ def ken_burns_effect(image_path, duration=4.0, zoom_direction="random"):
         return ImageClip(image_path).set_duration(duration).fadein(0.3).fadeout(0.3)
 
 def get_audio_duration(audio_path):
-    """Get audio duration with multiple fallback methods"""
+    """Get audio duration using MoviePy"""
+    if not MOVIEPY_AVAILABLE:
+        return 15  # Default fallback
+        
     try:
-        # Method 1: Try librosa
-        try:
-            import librosa
-            return librosa.get_duration(filename=audio_path)
-        except ImportError:
-            pass
-        
-        # Method 2: Try wave module (built-in)
-        try:
-            import wave
-            import contextlib
-            with contextlib.closing(wave.open(audio_path, 'r')) as f:
-                frames = f.getnframes()
-                rate = f.getframerate()
-                return frames / float(rate)
-        except:
-            pass
-        
-        # Method 3: Try moviepy
-        try:
-            audio_clip = AudioFileClip(audio_path)
-            duration = audio_clip.duration
-            audio_clip.close()
-            return duration
-        except:
-            pass
-        
-        # Final fallback
-        st.warning("⚠️ Could not determine audio duration, using default")
-        return 15  # Default duration in seconds
-        
+        audio_clip = AudioFileClip(audio_path)
+        duration = audio_clip.duration
+        audio_clip.close()
+        return duration
     except Exception as e:
-        st.warning(f"⚠️ Error getting audio duration: {e}, using default")
+        st.warning(f"⚠️ Could not determine audio duration: {e}, using default")
         return 15
 
-def create_slideshow_video_opencv(images, audio_path, output_path):
-    """Create slideshow video using OpenCV (fallback when MoviePy not available)"""
-    try:
-        # Get audio duration with enhanced fallbacks
-        audio_duration = get_audio_duration(audio_path)
-        
-        # Video properties
-        frame_width = 1280
-        frame_height = 720
-        fps = 24
-        total_frames = int(audio_duration * fps)
-        frames_per_image = max(1, total_frames // len(images)) if images else total_frames
-        
-        # Initialize video writer
-        fourcc = cv2.VideoWriter_fourcc(*'mp4v')
-        out = cv2.VideoWriter(output_path, fourcc, fps, (frame_width, frame_height))
-        
-        # Create frames
-        for frame_num in range(total_frames):
-            img_idx = min(len(images) - 1, frame_num // frames_per_image)
-            img_path = images[img_idx]
-            
-            # Load and resize image
-            img = cv2.imread(img_path)
-            if img is not None:
-                img = cv2.resize(img, (frame_width, frame_height))
-                
-                # Add text overlay
-                text = "Uganda Bird Spotter"
-                cv2.putText(img, text, (50, 50), cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
-                
-                out.write(img)
-            else:
-                # Create placeholder frame if image loading fails
-                frame = np.zeros((frame_height, frame_width, 3), dtype=np.uint8)
-                cv2.putText(frame, "Bird Image", (frame_width//2 - 100, frame_height//2), 
-                           cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
-                out.write(frame)
-        
-        out.release()
-        return output_path
-        
-    except Exception as e:
-        st.error(f"❌ OpenCV video creation error: {e}")
+def create_moviepy_video(images, audio_path, output_path, video_style="ken_burns"):
+    """
+    Create video using MoviePy with enhanced effects
+    """
+    if not MOVIEPY_AVAILABLE:
+        st.error("❌ MoviePy is not available. Cannot create video.")
         return None
-
-def create_enhanced_video(images, audio_path, output_path, video_style="ken_burns"):
-    """
-    Enhanced video creation with multiple styles using MoviePy
-    """
-    if not MOVIEPY_AVAILABLE or len(images) == 0:
-        st.warning("🎬 Using OpenCV fallback for video creation")
-        return create_slideshow_video_opencv(images, audio_path, output_path)
     
     try:
         # Load and process audio with enhanced effects
@@ -580,7 +545,7 @@ def create_enhanced_video(images, audio_path, output_path, video_style="ken_burn
                 elif video_style == "simple_fade":
                     # Simple crossfade between images
                     clip = ImageClip(img_path).set_duration(img_duration)
-                    clip = clip.crossfadein(0.5).crossfadeout(0.5)
+                    clip = clip.fadein(0.5).fadeout(0.5)
                 elif video_style == "zoom_only":
                     # Zoom only effect
                     clip = ImageClip(img_path).set_duration(img_duration)
@@ -590,7 +555,8 @@ def create_enhanced_video(images, audio_path, output_path, video_style="ken_burn
                     # Default Ken Burns
                     clip = ken_burns_effect(img_path, img_duration)
                 
-                clips.append(clip)
+                if clip is not None:
+                    clips.append(clip)
                 
             except Exception as e:
                 st.warning(f"⚠️ Could not process image {img_path}: {e}")
@@ -603,16 +569,10 @@ def create_enhanced_video(images, audio_path, output_path, video_style="ken_burn
         
         if not clips:
             st.error("❌ No valid video clips created")
-            return create_slideshow_video_opencv(images, audio_path, output_path)
+            return None
         
-        # Combine clips with crossfade
-        if video_style == "simple_fade":
-            # For crossfade style, use compose method with padding
-            video = concatenate_videoclips(clips, method="compose", padding=-0.5)
-        else:
-            # For other styles, use regular concatenation
-            video = concatenate_videoclips(clips, method="compose")
-            
+        # Combine clips
+        video = concatenate_videoclips(clips, method="compose")
         video = video.set_audio(narration)
         
         # Enhance video quality
@@ -641,9 +601,8 @@ def create_enhanced_video(images, audio_path, output_path, video_style="ken_burn
         return output_path
         
     except Exception as e:
-        st.error(f"❌ Enhanced video creation error: {e}")
-        st.info("🔄 Falling back to OpenCV video creation...")
-        return create_slideshow_video_opencv(images, audio_path, output_path)
+        st.error(f"❌ MoviePy video creation error: {e}")
+        return None
 
 class AdvancedVideoGenerator:
     def __init__(self):
@@ -943,7 +902,7 @@ class AdvancedVideoGenerator:
             return False
 
     def generate_story_video(self, species_name, video_style="ken_burns"):
-        """Generate a comprehensive story-based video with audio"""
+        """Generate a comprehensive story-based video with audio using MoviePy"""
         try:
             # Always generate a story - never fail here
             if self.story_generator is None:
@@ -993,10 +952,15 @@ class AdvancedVideoGenerator:
             st.info(f"🎨 Selected {len(bird_images)} images for video")
             self._display_image_grid(bird_images, species_name)
             
-            # Generate video
-            st.info("🎬 Creating story video...")
+            # Generate video using MoviePy
+            st.info("🎬 Creating story video with MoviePy...")
             video_file = f"temp_story_video_{species_name.replace(' ', '_')}.mp4"
-            video_path = create_enhanced_video(bird_images, audio_path, video_file, video_style)
+            
+            if not MOVIEPY_AVAILABLE:
+                st.error("❌ MoviePy is not available. Cannot create video.")
+                return None, None, None
+                
+            video_path = create_moviepy_video(bird_images, audio_path, video_file, video_style)
             
             # Clean up temporary audio file
             try:
@@ -1299,7 +1263,7 @@ def check_moviepy_dependencies():
     if MOVIEPY_AVAILABLE:
         st.success("✅ MoviePy: Available - Full video effects enabled")
     else:
-        st.warning("⚠️ MoviePy: Not available - Using basic OpenCV video creation")
+        st.error("❌ MoviePy: Not available - Video creation features disabled")
     
     # Check ffmpeg
     try:
@@ -1401,7 +1365,8 @@ def main():
             st.info("📖 Using placeholder images")
         
         if not video_generator.moviepy_available:
-            st.warning("🎥 Video Engine: OpenCV slideshow")
+            st.error("🎥 Video Engine: MoviePy Not Available")
+            st.info("🔧 Please install MoviePy for video creation")
         else:
             st.success("🎥 Video Engine: MoviePy (Ken Burns effect)")
         
@@ -1587,127 +1552,144 @@ def main():
     st.markdown("---")
     st.markdown('<div class="section-title">🎬 AI Story Video Generator</div>', unsafe_allow_html=True)
     
-    st.markdown(f"""
-    <div class="video-section">
-        <strong>📖 AI Story Generation with Video</strong><br>
-        Generate complete educational story videos. Each video includes:
-        <br><br>
-        • <strong>AI-Generated Story</strong>: Unique educational narrative about the bird<br>
-        • <strong>Text-to-Speech Audio</strong>: Professional narration of the story<br>
-        • <strong>Visual Effects</strong>: Beautiful image transitions and effects<br>
-        • <strong>Multiple Images</strong>: Showcases the bird from different angles<br>
-        <br>
-        <strong>Video Engine:</strong> {'MoviePy with Ken Burns effect' if video_generator.moviepy_available else 'OpenCV slideshow'}
-    </div>
-    """, unsafe_allow_html=True)
-    
-    # Video generation options with style selection
-    col1, col2, col3 = st.columns([2, 1, 1])
-    
-    with col1:
-        # Option 1: Use detected species
-        if st.session_state.get('selected_species_for_video'):
-            st.info(f"🦜 Detected Species: **{st.session_state.selected_species_for_video}**")
+    if not MOVIEPY_AVAILABLE:
+        st.error("""
+        ❌ **MoviePy is not available!**
+        
+        Video creation features are disabled. Please install MoviePy to enable video generation:
+        
+        ```bash
+        pip install moviepy imageio imageio-ffmpeg
+        ```
+        
+        Or add to your requirements.txt:
+        ```txt
+        moviepy>=1.0.3
+        imageio>=2.9.0
+        imageio-ffmpeg>=0.4.5
+        ```
+        """)
+    else:
+        st.markdown(f"""
+        <div class="video-section">
+            <strong>📖 AI Story Generation with Video</strong><br>
+            Generate complete educational story videos. Each video includes:
+            <br><br>
+            • <strong>AI-Generated Story</strong>: Unique educational narrative about the bird<br>
+            • <strong>Text-to-Speech Audio</strong>: Professional narration of the story<br>
+            • <strong>Visual Effects</strong>: Beautiful image transitions and effects<br>
+            • <strong>Multiple Images</strong>: Showcases the bird from different angles<br>
+            <br>
+            <strong>Video Engine:</strong> MoviePy with Ken Burns effect
+        </div>
+        """, unsafe_allow_html=True)
+        
+        # Video generation options with style selection
+        col1, col2, col3 = st.columns([2, 1, 1])
+        
+        with col1:
+            # Option 1: Use detected species
+            if st.session_state.get('selected_species_for_video'):
+                st.info(f"🦜 Detected Species: **{st.session_state.selected_species_for_video}**")
 
-    with col2:
-        # Video style selection
-        video_style = st.selectbox(
-            "Video Style:",
-            options=["ken_burns", "simple_fade", "zoom_only"],
-            format_func=lambda x: {
-                "ken_burns": "🎬 Ken Burns Effect",
-                "simple_fade": "🔄 Crossfade",
-                "zoom_only": "🔍 Zoom Only"
-            }[x]
-        )
+        with col2:
+            # Video style selection
+            video_style = st.selectbox(
+                "Video Style:",
+                options=["ken_burns", "simple_fade", "zoom_only"],
+                format_func=lambda x: {
+                    "ken_burns": "🎬 Ken Burns Effect",
+                    "simple_fade": "🔄 Crossfade",
+                    "zoom_only": "🔍 Zoom Only"
+                }[x]
+            )
 
-    with col3:
-        if st.session_state.get('selected_species_for_video'):
-            if st.button("🎬 Generate Story Video", use_container_width=True, type="primary"):
-                with st.spinner("Creating enhanced AI story video..."):
-                    video_path, story_text, used_images = video_generator.generate_video(
-                        st.session_state.selected_species_for_video, 
-                        video_style=video_style
-                    )
+        with col3:
+            if st.session_state.get('selected_species_for_video'):
+                if st.button("🎬 Generate Story Video", use_container_width=True, type="primary"):
+                    with st.spinner("Creating enhanced AI story video..."):
+                        video_path, story_text, used_images = video_generator.generate_video(
+                            st.session_state.selected_species_for_video, 
+                            video_style=video_style
+                        )
+                        if video_path:
+                            st.session_state.generated_video_path = video_path
+                            st.session_state.generated_story = story_text
+                            st.session_state.used_images = used_images
+                            st.success("✅ AI story video generated successfully!")
+                        else:
+                            st.error("❌ Failed to generate story video")
+        
+        # Manual species selection
+        st.markdown("---")
+        col1, col2 = st.columns([2, 1])
+        
+        with col1:
+            manual_species = st.selectbox(
+                "Or select a species manually:",
+                options=bird_model.bird_species,
+                index=0 if not st.session_state.get('selected_species_for_video') else 
+                      bird_model.bird_species.index(st.session_state.selected_species_for_video) 
+                      if st.session_state.selected_species_for_video in bird_model.bird_species else 0
+            )
+        
+        with col2:
+            if st.button("🎬 Generate Video for Selected Bird", use_container_width=True, type="primary"):
+                with st.spinner("Creating AI story video with audio..."):
+                    video_path, story_text, used_images = video_generator.generate_video(manual_species, video_style=video_style)
                     if video_path:
                         st.session_state.generated_video_path = video_path
                         st.session_state.generated_story = story_text
                         st.session_state.used_images = used_images
+                        st.session_state.selected_species_for_video = manual_species
                         st.success("✅ AI story video generated successfully!")
                     else:
                         st.error("❌ Failed to generate story video")
-    
-    # Manual species selection
-    st.markdown("---")
-    col1, col2 = st.columns([2, 1])
-    
-    with col1:
-        manual_species = st.selectbox(
-            "Or select a species manually:",
-            options=bird_model.bird_species,
-            index=0 if not st.session_state.get('selected_species_for_video') else 
-                  bird_model.bird_species.index(st.session_state.selected_species_for_video) 
-                  if st.session_state.selected_species_for_video in bird_model.bird_species else 0
-        )
-    
-    with col2:
-        if st.button("🎬 Generate Video for Selected Bird", use_container_width=True, type="primary"):
-            with st.spinner("Creating AI story video with audio..."):
-                video_path, story_text, used_images = video_generator.generate_video(manual_species, video_style=video_style)
-                if video_path:
-                    st.session_state.generated_video_path = video_path
-                    st.session_state.generated_story = story_text
-                    st.session_state.used_images = used_images
-                    st.session_state.selected_species_for_video = manual_species
-                    st.success("✅ AI story video generated successfully!")
-                else:
-                    st.error("❌ Failed to generate story video")
-    
-    # Display generated story and video
-    if st.session_state.get('generated_video_path') and os.path.exists(st.session_state.generated_video_path):
-        st.markdown("---")
-        st.markdown("### 📖 AI-Generated Story Video")
         
-        # Display the story
-        if st.session_state.get('generated_story'):
-            st.markdown(f'<div class="story-box"><strong>📖 AI-Generated Story:</strong><br>{st.session_state.generated_story}</div>', unsafe_allow_html=True)
-        
-        # Display video
-        try:
-            with open(st.session_state.generated_video_path, "rb") as video_file:
-                video_bytes = video_file.read()
+        # Display generated story and video
+        if st.session_state.get('generated_video_path') and os.path.exists(st.session_state.generated_video_path):
+            st.markdown("---")
+            st.markdown("### 📖 AI-Generated Story Video")
             
-            st.video(video_bytes)
+            # Display the story
+            if st.session_state.get('generated_story'):
+                st.markdown(f'<div class="story-box"><strong>📖 AI-Generated Story:</strong><br>{st.session_state.generated_story}</div>', unsafe_allow_html=True)
             
-            # Video information
-            video_type = "MoviePy with Ken Burns" if video_generator.moviepy_available else "OpenCV slideshow"
-            st.info(f"**Video Details:** {st.session_state.selected_species_for_video} | {video_type} | {len(st.session_state.used_images)} images | Audio Narration")
-            
-            # Download buttons
-            col1, col2 = st.columns(2)
-            
-            with col1:
-                st.download_button(
-                    label="📥 Download Story Video",
-                    data=video_bytes,
-                    file_name=f"uganda_bird_story_{st.session_state.selected_species_for_video.replace(' ', '_')}.mp4",
-                    mime="video/mp4",
-                    use_container_width=True
-                )
-            
-            with col2:
-                if st.session_state.get('generated_story'):
-                    story_bytes = st.session_state.generated_story.encode('utf-8')
+            # Display video
+            try:
+                with open(st.session_state.generated_video_path, "rb") as video_file:
+                    video_bytes = video_file.read()
+                
+                st.video(video_bytes)
+                
+                # Video information
+                st.info(f"**Video Details:** {st.session_state.selected_species_for_video} | MoviePy with {video_style} | {len(st.session_state.used_images)} images | Audio Narration")
+                
+                # Download buttons
+                col1, col2 = st.columns(2)
+                
+                with col1:
                     st.download_button(
-                        label="📝 Download Story Text",
-                        data=story_bytes,
-                        file_name=f"uganda_bird_story_{st.session_state.selected_species_for_video.replace(' ', '_')}.txt",
-                        mime="text/plain",
+                        label="📥 Download Story Video",
+                        data=video_bytes,
+                        file_name=f"uganda_bird_story_{st.session_state.selected_species_for_video.replace(' ', '_')}.mp4",
+                        mime="video/mp4",
                         use_container_width=True
                     )
-            
-        except Exception as e:
-            st.error(f"❌ Error displaying video: {e}")
+                
+                with col2:
+                    if st.session_state.get('generated_story'):
+                        story_bytes = st.session_state.generated_story.encode('utf-8')
+                        st.download_button(
+                            label="📝 Download Story Text",
+                            data=story_bytes,
+                            file_name=f"uganda_bird_story_{st.session_state.selected_species_for_video.replace(' ', '_')}.txt",
+                            mime="text/plain",
+                            use_container_width=True
+                        )
+                
+            except Exception as e:
+                st.error(f"❌ Error displaying video: {e}")
 
 if __name__ == "__main__":
     main()
