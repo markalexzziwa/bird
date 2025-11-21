@@ -1,6 +1,6 @@
+# ========== DEPENDENCY INSTALLATION ==========
 import streamlit as st
 import numpy as np
-from PIL import Image
 import tempfile
 import os
 import base64
@@ -10,22 +10,34 @@ import random
 import requests
 import urllib.request
 import pandas as pd
-import cv2
-import torch
-import torch.nn as nn
-from gtts import gTTS
 import warnings
 import subprocess
 import shutil
 from pathlib import Path
-import subprocess
 import sys
 
+# Install OpenCV first
 try:
     import cv2
 except ImportError:
+    st.warning("📦 OpenCV not available. Installing...")
+    import subprocess
+    import sys
     subprocess.check_call([sys.executable, "-m", "pip", "install", "opencv-python-headless"])
     import cv2
+    st.success("✅ OpenCV installed successfully!")
+
+# Now import other modules
+try:
+    from PIL import Image
+except ImportError:
+    subprocess.check_call([sys.executable, "-m", "pip", "install", "Pillow"])
+    from PIL import Image
+
+import torch
+import torch.nn as nn
+from gtts import gTTS
+
 warnings.filterwarnings('ignore')
 
 # ========== MOVIEPY INSTALLATION AND CONFIGURATION ==========
@@ -40,8 +52,6 @@ def install_moviepy():
     except ImportError:
         st.warning("🎬 MoviePy not available. Installing...")
         try:
-            import subprocess
-            import sys
             subprocess.check_call([sys.executable, "-m", "pip", "install", "moviepy", "imageio", "imageio-ffmpeg"])
             st.success("✅ MoviePy installed successfully!")
             
@@ -198,6 +208,13 @@ st.markdown("""
         padding: 15px;
         margin: 10px 0;
     }
+    .warning-box {
+        background: rgba(255, 193, 7, 0.2);
+        border: 1px solid #ffc107;
+        border-radius: 8px;
+        padding: 15px;
+        margin: 10px 0;
+    }
     .sidebar-logo {
         width: 100px;
         height: 100px;
@@ -248,6 +265,22 @@ st.markdown("""
         border-radius: 8px;
         border: 2px solid #2E86AB;
     }
+    .confidence-low {
+        background: rgba(255, 193, 7, 0.3);
+        border: 2px solid #ffc107;
+        border-radius: 12px;
+        padding: 20px;
+        margin: 15px 0;
+        text-align: center;
+    }
+    .confidence-high {
+        background: rgba(40, 167, 69, 0.3);
+        border: 2px solid #28a745;
+        border-radius: 12px;
+        padding: 20px;
+        margin: 15px 0;
+        text-align: center;
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -295,8 +328,6 @@ def install_gdown():
     except ImportError:
         st.warning("📦 gdown not available. Installing...")
         try:
-            import subprocess
-            import sys
             subprocess.check_call([sys.executable, "-m", "pip", "install", "gdown"])
             import gdown
             st.success("✅ gdown installed successfully!")
@@ -1026,6 +1057,7 @@ class ResNet34BirdModel:
         self.transform = None
         self.model_path = './resnet34_bird_region_weights.pth'
         self.label_map_path = './label_map.json'
+        self.confidence_threshold = 0.49  # 49% confidence threshold
         
     def download_model_from_gdrive(self):
         """Download model from Google Drive using the direct link"""
@@ -1207,16 +1239,57 @@ class ResNet34BirdModel:
             st.error(f"❌ Model prediction error: {e}")
             return "Prediction Error", 0.0
     
+    def check_confidence_threshold(self, classifications):
+        """Check if average confidence meets the threshold"""
+        if not classifications:
+            return False, 0.0
+        
+        avg_confidence = sum(conf for _, conf in classifications) / len(classifications)
+        return avg_confidence >= self.confidence_threshold, avg_confidence
+    
+    def display_low_confidence_warning(self, avg_confidence):
+        """Display warning message for low confidence predictions"""
+        st.markdown(f"""
+        <div class="confidence-low">
+            <h3>⚠️ Low Identification Confidence: {avg_confidence:.1%}</h3>
+            <p><strong>The AI model is not confident enough in this identification to proceed.</strong></p>
+            <p>Average confidence ({avg_confidence:.1%}) is below the required threshold of {self.confidence_threshold:.0%}.</p>
+            
+            <h4>🔧 Please try these improvements:</h4>
+            <ul style="text-align: left; margin-left: 20px;">
+                <li><strong>📷 Improve image resolution</strong> - Use a higher quality camera</li>
+                <li><strong>🦅 Capture the entire bird</strong> - Make sure the whole bird is visible</li>
+                <li><strong>📐 Change the angle</strong> - Take photos from different perspectives</li>
+                <li><strong>💡 Better lighting</strong> - Ensure good, natural lighting</li>
+                <li><strong>🎯 Focus on distinctive features</strong> - Capture clear views of beak, wings, and colors</li>
+                <li><strong>🚫 Reduce background clutter</strong> - Simple backgrounds work better</li>
+            </ul>
+            
+            <p><strong>Tip:</strong> The model works best with clear, well-lit photos where the bird's distinctive features are clearly visible.</p>
+        </div>
+        """, unsafe_allow_html=True)
+    
+    def display_high_confidence_success(self, avg_confidence):
+        """Display success message for high confidence predictions"""
+        st.markdown(f"""
+        <div class="confidence-high">
+            <h3>✅ High Identification Confidence: {avg_confidence:.1%}</h3>
+            <p><strong>The AI model is confident in this identification!</strong></p>
+            <p>Average confidence ({avg_confidence:.1%}) meets the required threshold of {self.confidence_threshold:.0%}.</p>
+            <p>You can now proceed with video generation for this bird species.</p>
+        </div>
+        """, unsafe_allow_html=True)
+    
     def predict_bird_species(self, image):
-        """Complete prediction pipeline"""
+        """Complete prediction pipeline with confidence threshold check"""
         if not self.model_loaded:
             st.error("❌ Model not loaded. Cannot make predictions.")
-            return [], [], None
+            return [], [], None, False
         
         detections, original_image = self.detect_bird_regions(image)
         
         if not detections:
-            return [], [], original_image
+            return [], [], original_image, False
         
         classifications = []
         
@@ -1244,7 +1317,10 @@ class ResNet34BirdModel:
                 st.error(f"❌ Error processing bird region {i+1}: {e}")
                 classifications.append(("Processing Error", 0.0))
         
-        return detections, classifications, original_image
+        # Check confidence threshold
+        meets_threshold, avg_confidence = self.check_confidence_threshold(classifications)
+        
+        return detections, classifications, original_image, meets_threshold
 
 def get_base64_image(image_path):
     """Convert image to base64 for embedding in HTML"""
@@ -1302,6 +1378,7 @@ def initialize_system():
         st.session_state.selected_species_for_video = None
         st.session_state.generated_story = None
         st.session_state.used_images = None
+        st.session_state.confidence_met_threshold = False
     
     # Initialize system only once
     if not st.session_state.system_initialized:
@@ -1316,6 +1393,7 @@ def initialize_system():
                 st.session_state.model_loaded = True
                 st.session_state.system_initialized = True
                 st.success(f"✅ System ready! Can identify {len(st.session_state.bird_model.bird_species)} bird species")
+                st.info(f"📊 Confidence threshold set to: {st.session_state.bird_model.confidence_threshold:.0%}")
                 
                 # Show information about available bird images
                 if video_model_data is not None and isinstance(video_model_data, dict):
@@ -1366,6 +1444,12 @@ def main():
             st.markdown(f"• {species}")
         st.markdown('</div>', unsafe_allow_html=True)
         
+        # Confidence threshold info
+        st.markdown("---")
+        st.markdown("### 📊 Confidence Settings")
+        st.markdown(f"**Minimum Confidence:** {bird_model.confidence_threshold:.0%}")
+        st.markdown("_Predictions below this threshold will not proceed to video generation_")
+        
         # Video model status
         st.markdown("---")
         if video_model_data is not None:
@@ -1411,6 +1495,10 @@ def main():
         This app uses AI models for bird identification and story generation. 
         Upload bird photos for identification, then generate AI-powered educational story videos 
         with narrated audio and beautiful visual effects using Ken Burns animation.
+        
+        <br><br>
+        <strong>📊 Important:</strong> The AI requires at least <strong>49% confidence</strong> in identification 
+        to proceed with video generation. If confidence is low, you'll get specific tips to improve your photo.
     </div>
     """, unsafe_allow_html=True)
     
@@ -1496,12 +1584,13 @@ def main():
                 st.error("❌ Model not loaded. Cannot make predictions.")
             else:
                 with st.spinner("Analyzing bird species using ResNet34..."):
-                    detections, classifications, original_image = bird_model.predict_bird_species(current_image)
+                    detections, classifications, original_image, meets_threshold = bird_model.predict_bird_species(current_image)
                     
                     st.session_state.detection_complete = True
                     st.session_state.bird_detections = detections
                     st.session_state.bird_classifications = classifications
                     st.session_state.current_image = original_image
+                    st.session_state.confidence_met_threshold = meets_threshold
     
     # Display results
     if st.session_state.detection_complete and st.session_state.current_image is not None:
@@ -1510,12 +1599,22 @@ def main():
         
         detections = st.session_state.bird_detections
         classifications = st.session_state.bird_classifications
+        meets_threshold = st.session_state.confidence_met_threshold
         
         if not detections:
             st.info("🔍 No birds detected in this image")
         else:
+            # Calculate average confidence
+            avg_confidence = sum(conf for _, conf in classifications) / len(classifications) if classifications else 0.0
+            
+            # Display confidence status
+            if meets_threshold:
+                bird_model.display_high_confidence_success(avg_confidence)
+            else:
+                bird_model.display_low_confidence_warning(avg_confidence)
+            
             # Metrics
-            col_metric1, col_metric2 = st.columns(2)
+            col_metric1, col_metric2, col_metric3 = st.columns(3)
             with col_metric1:
                 st.markdown('<div class="glass-metric">', unsafe_allow_html=True)
                 st.metric("Birds Identified", len(detections))
@@ -1523,33 +1622,37 @@ def main():
             
             with col_metric2:
                 st.markdown('<div class="glass-metric">', unsafe_allow_html=True)
-                if classifications:
-                    avg_confidence = sum(conf for _, conf in classifications) / len(classifications)
-                    st.metric("Avg Confidence", f"{avg_confidence:.1%}")
-                else:
-                    st.metric("Avg Confidence", "N/A")
+                st.metric("Avg Confidence", f"{avg_confidence:.1%}")
                 st.markdown('</div>', unsafe_allow_html=True)
             
-            # Process each bird
-            for i, ((box, det_conf), (species, class_conf)) in enumerate(zip(detections, classifications)):
-                st.markdown("---")
-                
-                # Bird information
-                st.markdown('<div class="glass-card">', unsafe_allow_html=True)
-                st.markdown(f"### 🐦 Bird #{i+1} - {species}")
-                
-                st.markdown(f"""
-                <div style="padding: 15px; background: rgba(255,255,255,0.1); border-radius: 8px;">
-                    <h4>ResNet34 Model Prediction</h4>
-                    <p><strong>Species:</strong> {species}</p>
-                    <p><strong>Confidence:</strong> {class_conf:.1%}</p>
-                    <p><strong>Detection Score:</strong> {det_conf:.1%}</p>
-                </div>
-                """, unsafe_allow_html=True)
+            with col_metric3:
+                st.markdown('<div class="glass-metric">', unsafe_allow_html=True)
+                status = "✅ Met" if meets_threshold else "❌ Below"
+                st.metric("Confidence Threshold", status)
                 st.markdown('</div>', unsafe_allow_html=True)
-                
-                # Store the species for video generation
-                st.session_state.selected_species_for_video = species
+            
+            # Only show detailed bird information if confidence threshold is met
+            if meets_threshold:
+                # Process each bird
+                for i, ((box, det_conf), (species, class_conf)) in enumerate(zip(detections, classifications)):
+                    st.markdown("---")
+                    
+                    # Bird information
+                    st.markdown('<div class="glass-card">', unsafe_allow_html=True)
+                    st.markdown(f"### 🐦 Bird #{i+1} - {species}")
+                    
+                    st.markdown(f"""
+                    <div style="padding: 15px; background: rgba(255,255,255,0.1); border-radius: 8px;">
+                        <h4>ResNet34 Model Prediction</h4>
+                        <p><strong>Species:</strong> {species}</p>
+                        <p><strong>Confidence:</strong> {class_conf:.1%}</p>
+                        <p><strong>Detection Score:</strong> {det_conf:.1%}</p>
+                    </div>
+                    """, unsafe_allow_html=True)
+                    st.markdown('</div>', unsafe_allow_html=True)
+                    
+                    # Store the species for video generation
+                    st.session_state.selected_species_for_video = species
         
         # Reset button
         if st.button("🔄 Analyze Another Image", type="secondary", use_container_width=True):
@@ -1560,9 +1663,10 @@ def main():
             st.session_state.generated_video_path = None
             st.session_state.generated_story = None
             st.session_state.used_images = None
+            st.session_state.confidence_met_threshold = False
             st.rerun()
     
-    # Story Video Generation Section
+    # Story Video Generation Section - Only show if confidence threshold was met
     st.markdown("---")
     st.markdown('<div class="section-title">🎬 AI Story Video Generator</div>', unsafe_allow_html=True)
     
@@ -1584,50 +1688,62 @@ def main():
         ```
         """)
     else:
-        st.markdown(f"""
-        <div class="video-section">
-            <strong>📖 Enhanced AI Story Generation with Video</strong><br>
-            Generate comprehensive educational story videos featuring:
-            <br><br>
-            • <strong>Detailed AI-Generated Stories</strong>: Rich, educational narratives with ecological context<br>
-            • <strong>Professional Text-to-Speech Audio</strong>: Clear narration of detailed stories<br>
-            • <strong>Ken Burns Visual Effects</strong>: Beautiful pan and zoom animations on 8+ images<br>
-            • <strong>Multiple Bird Images</strong>: Showcases each species from various angles and settings<br>
-            <br>
-            <strong>Video Features:</strong> Ken Burns effects only | 8+ images per video | Detailed narration | HD Quality
-        </div>
-        """, unsafe_allow_html=True)
-        
-        # Video generation options - Only Ken Burns effect
-        col1, col2 = st.columns([3, 1])
-        
-        with col1:
-            # Option 1: Use detected species
-            if st.session_state.get('selected_species_for_video'):
-                st.info(f"🦜 Detected Species: **{st.session_state.selected_species_for_video}**")
+        # Only show video generation options if confidence threshold was met
+        if st.session_state.get('confidence_met_threshold', False):
+            st.markdown(f"""
+            <div class="video-section">
+                <strong>🎉 Confidence Threshold Met! Video Generation Available</strong><br>
+                Generate comprehensive educational story videos featuring:
+                <br><br>
+                • <strong>Detailed AI-Generated Stories</strong>: Rich, educational narratives with ecological context<br>
+                • <strong>Professional Text-to-Speech Audio</strong>: Clear narration of detailed stories<br>
+                • <strong>Ken Burns Visual Effects</strong>: Beautiful pan and zoom animations on 8+ images<br>
+                • <strong>Multiple Bird Images</strong>: Showcases each species from various angles and settings<br>
+                <br>
+                <strong>Video Features:</strong> Ken Burns effects only | 8+ images per video | Detailed narration | HD Quality
+            </div>
+            """, unsafe_allow_html=True)
+            
+            # Video generation options - Only Ken Burns effect
+            col1, col2 = st.columns([3, 1])
+            
+            with col1:
+                # Option 1: Use detected species
+                if st.session_state.get('selected_species_for_video'):
+                    st.info(f"🦜 Detected Species: **{st.session_state.selected_species_for_video}**")
 
-        with col2:
-            if st.session_state.get('selected_species_for_video'):
-                if st.button("🎬 Generate Story Video", use_container_width=True, type="primary"):
-                    with st.spinner("Creating enhanced story video with Ken Burns effects..."):
-                        video_path, story_text, used_images = video_generator.generate_video(
-                            st.session_state.selected_species_for_video
-                        )
-                        if video_path:
-                            st.session_state.generated_video_path = video_path
-                            st.session_state.generated_story = story_text
-                            st.session_state.used_images = used_images
-                            st.success("✅ Enhanced story video generated successfully!")
-                        else:
-                            st.error("❌ Failed to generate story video")
+            with col2:
+                if st.session_state.get('selected_species_for_video'):
+                    if st.button("🎬 Generate Story Video", use_container_width=True, type="primary"):
+                        with st.spinner("Creating enhanced story video with Ken Burns effects..."):
+                            video_path, story_text, used_images = video_generator.generate_video(
+                                st.session_state.selected_species_for_video
+                            )
+                            if video_path:
+                                st.session_state.generated_video_path = video_path
+                                st.session_state.generated_story = story_text
+                                st.session_state.used_images = used_images
+                                st.success("✅ Enhanced story video generated successfully!")
+                            else:
+                                st.error("❌ Failed to generate story video")
+        else:
+            st.warning("""
+            **⚠️ Video Generation Currently Unavailable**
+            
+            To generate story videos, please first identify a bird species with at least 49% confidence.
+            Upload a clear photo of a bird and ensure the identification meets the confidence threshold.
+            """)
         
-        # Manual species selection
+        # Manual species selection (always available)
         st.markdown("---")
+        st.markdown("### 🔍 Manual Species Selection")
+        st.markdown("_You can also generate videos for any species manually:_")
+        
         col1, col2 = st.columns([3, 1])
         
         with col1:
             manual_species = st.selectbox(
-                "Or select a species manually:",
+                "Select a bird species:",
                 options=bird_model.bird_species,
                 index=0 if not st.session_state.get('selected_species_for_video') else 
                       bird_model.bird_species.index(st.session_state.selected_species_for_video) 
