@@ -321,45 +321,32 @@ class BirdStoryGenerator:
         tmpl = random.choice(self.templates)
         return tmpl.format(name=name, color_phrase=color_phrase, desc=desc)
 
-# ========== ENHANCED FILE DOWNLOADER WITH GDOWN ==========
-def install_gdown():
-    """Install gdown if not available"""
-    try:
-        import gdown
-        return True
-    except ImportError:
-        st.warning("📦 gdown not available. Installing...")
-        try:
-            subprocess.check_call([sys.executable, "-m", "pip", "install", "gdown"])
-            import gdown
-            st.success("✅ gdown installed successfully!")
-            return True
-        except Exception as e:
-            st.error(f"❌ Failed to install gdown: {e}")
-            return False
-
-def download_file_from_gdrive(file_id, destination):
-    """Download file from Google Drive using gdown"""
+# ========== ENHANCED FILE DOWNLOADER ==========
+def download_file_from_gdrive(direct_link, destination):
+    """Download file from Google Drive using direct download link"""
     try:
         if not os.path.exists(destination):
             st.info(f"📥 Downloading {os.path.basename(destination)} from Google Drive...")
             
-            # Install and use gdown
-            if install_gdown():
-                import gdown
-                url = f'https://drive.google.com/uc?id={file_id}'
-                
-                # Create progress bar
-                progress_bar = st.progress(0)
-                status_text = st.empty()
-                
-                def progress_hook(current, total, width=80):
-                    percent = current / total
-                    progress_bar.progress(percent)
-                    status_text.text(f"Downloaded: {current/(1024*1024):.1f} MB / {total/(1024*1024):.1f} MB")
-                
-                # Download with progress
-                gdown.download(url, destination, quiet=False, fuzzy=True)
+            # Create progress bar
+            progress_bar = st.progress(0)
+            status_text = st.empty()
+            
+            # Use requests to download the file
+            response = requests.get(direct_link, stream=True)
+            total_size = int(response.headers.get('content-length', 0))
+            
+            if response.status_code == 200:
+                with open(destination, 'wb') as f:
+                    downloaded = 0
+                    for chunk in response.iter_content(chunk_size=8192):
+                        if chunk:
+                            f.write(chunk)
+                            downloaded += len(chunk)
+                            if total_size > 0:
+                                progress = downloaded / total_size
+                                progress_bar.progress(progress)
+                                status_text.text(f"Downloaded: {downloaded/(1024*1024):.1f} MB / {total_size/(1024*1024):.1f} MB")
                 
                 progress_bar.progress(1.0)
                 status_text.empty()
@@ -372,7 +359,7 @@ def download_file_from_gdrive(file_id, destination):
                     st.error(f"❌ Download failed for {os.path.basename(destination)}")
                     return False
             else:
-                st.error("❌ gdown installation failed")
+                st.error(f"❌ Failed to download file. HTTP Status: {response.status_code}")
                 return False
         
         # If file already exists
@@ -415,7 +402,7 @@ def load_bird_data():
                 st.error(f"Error loading bird data from {pth_path}: {e}")
                 continue
     
-    # If not found, try to download
+    # If not found, use placeholder data
     st.warning("bird_data.pth not found in standard locations. Using placeholder data.")
     return {}
 
@@ -447,9 +434,11 @@ def load_video_model():
     if pth_path is None:
         st.info("🔍 bird_path.pth not found in standard locations. Downloading...")
         pth_path = "bird_path.pth"  # Default download location
-        file_id = "1J9T5r5TboWzvqAPQHmfvQmozor_wmmPz"  # From your Google Drive link
         
-        success = download_file_from_gdrive(file_id, pth_path)
+        # Direct download link for bird_path.pth
+        direct_link = "https://drive.google.com/uc?export=download&id=1J9T5r5TboWzvqAPQHmfvQmozor_wmmPz"
+        
+        success = download_file_from_gdrive(direct_link, pth_path)
         if not success:
             st.warning("❌ Could not download bird_path.pth. Using default story generation.")
             return None
@@ -1062,8 +1051,10 @@ class ResNet34BirdModel:
         self.confidence_threshold = 0.49  # 49% confidence threshold
         
     def download_model_from_gdrive(self):
-        """Download model from Google Drive using the direct link"""
-        return download_file_from_gdrive("1yfiYcz6e2hWtQTXW6AZVU-iwSUjDP92y", self.model_path)
+        """Download model from Google Drive using direct download link"""
+        # Direct download link for resnet model
+        direct_link = "https://drive.google.com/uc?export=download&id=1yfiYcz6e2hWtQTXW6AZVU-iwSUjDP92y"
+        return download_file_from_gdrive(direct_link, self.model_path)
     
     def check_dependencies(self):
         """Check if PyTorch and torchvision are available"""
@@ -1083,7 +1074,6 @@ class ResNet34BirdModel:
             numpy>=1.21.0
             opencv-python-headless>=4.5.0
             requests>=2.25.0
-            gdown>=4.4.0
             streamlit>=1.22.0
             pandas>=1.3.0
             gtts>=2.2.0
@@ -1139,8 +1129,9 @@ class ResNet34BirdModel:
                 
                 Please ensure:
                 1. The Google Drive file is publicly accessible
-                2. The file ID is correct: 1yfiYcz6e2hWtQTXW6AZVU-iwSUjDP92y
-                3. You have internet connection
+                2. You have internet connection
+                
+                The app will continue with limited functionality.
                 """)
                 return False
         
@@ -1403,25 +1394,12 @@ def initialize_system():
                 else:
                     st.info("📖 Story video generation available with placeholder images")
             else:
-                st.error("❌ System initialization failed. Please check the requirements and internet connection.")
+                st.warning("⚠️ Model loading failed. The app will run with limited functionality (manual video generation only).")
+                st.session_state.system_initialized = True
 
 def main():
     # Initialize the system
     initialize_system()
-    
-    # Check if system initialized properly
-    if not st.session_state.get('system_initialized', False):
-        st.error("""
-        ❌ System failed to initialize properly. 
-        
-        Please check:
-        1. Required dependencies are installed
-        2. Internet connection is available for model download
-        3. Google Drive file is accessible
-        
-        The app cannot run without the ResNet34 model file.
-        """)
-        return
     
     bird_model = st.session_state.bird_model
     video_generator = st.session_state.video_generator
@@ -1437,20 +1415,25 @@ def main():
         
         st.markdown('<div class="sidebar-title">Uganda Bird Spotter</div>', unsafe_allow_html=True)
         
-        st.markdown("### 🦅 Detectable Birds")
-        st.markdown(f"**Total Species:** {len(bird_model.bird_species)}")
-        
-        # Bird list with scroll
-        st.markdown('<div class="bird-list">', unsafe_allow_html=True)
-        for species in bird_model.bird_species:
-            st.markdown(f"• {species}")
-        st.markdown('</div>', unsafe_allow_html=True)
-        
-        # Confidence threshold info
-        st.markdown("---")
-        st.markdown("### 📊 Confidence Settings")
-        st.markdown(f"**Minimum Confidence:** {bird_model.confidence_threshold:.0%}")
-        st.markdown("_Predictions below this threshold will not proceed to video generation_")
+        # Model status
+        if st.session_state.model_loaded:
+            st.success("🔍 Bird Identification: **Available**")
+            st.markdown("### 🦅 Detectable Birds")
+            st.markdown(f"**Total Species:** {len(bird_model.bird_species)}")
+            
+            # Bird list with scroll
+            st.markdown('<div class="bird-list">', unsafe_allow_html=True)
+            for species in bird_model.bird_species:
+                st.markdown(f"• {species}")
+            st.markdown('</div>', unsafe_allow_html=True)
+            
+            # Confidence threshold info
+            st.markdown("---")
+            st.markdown("### 📊 Confidence Settings")
+            st.markdown(f"**Minimum Confidence:** {bird_model.confidence_threshold:.0%}")
+        else:
+            st.warning("🔍 Bird Identification: **Limited**")
+            st.info("Manual video generation is available")
         
         # Video model status
         st.markdown("---")
@@ -1491,100 +1474,115 @@ def main():
     """, unsafe_allow_html=True)
     
     # Welcome message
-    st.markdown("""
-    <div class="glass-card">
-        <strong>🦜 Welcome to Uganda Bird Spotter!</strong><br>
-        This app uses AI models for bird identification and story generation. 
-        Upload bird photos for identification, then generate AI-powered educational story videos 
-        with narrated audio and beautiful visual effects using Ken Burns animation.
-        
-        <br><br>
-        <strong>📊 Important:</strong> The AI requires at least <strong>49% confidence</strong> in identification 
-        to proceed with video generation. If confidence is low, you'll get specific tips to improve your photo.
-    </div>
-    """, unsafe_allow_html=True)
-    
-    # Method selection
-    col1, col2 = st.columns(2)
-    
-    with col1:
-        upload_active = st.session_state.active_method == "upload"
-        if st.button(
-            "📁 Upload Bird Photo", 
-            use_container_width=True, 
-            type="primary" if upload_active else "secondary",
-            key="upload_btn"
-        ):
-            st.session_state.active_method = "upload"
-            st.session_state.current_image = None
-            st.rerun()
-    
-    with col2:
-        camera_active = st.session_state.active_method == "camera"
-        if st.button(
-            "📷 Capture Live Photo", 
-            use_container_width=True, 
-            type="primary" if camera_active else "secondary",
-            key="camera_btn"
-        ):
-            st.session_state.active_method = "camera"
-            st.session_state.current_image = None
-            st.rerun()
-    
-    st.markdown("---")
-    
-    # Image input
-    current_image = None
-    
-    if st.session_state.active_method == "upload":
-        st.markdown('<div class="section-title">Upload Bird Photo</div>', unsafe_allow_html=True)
-        st.markdown('<div class="glass-upload">', unsafe_allow_html=True)
-        uploaded_file = st.file_uploader(
-            "Choose a bird image", 
-            type=['jpg', 'jpeg', 'png'],
-            help="Upload photos of birds for identification",
-            label_visibility="collapsed",
-            key="file_uploader"
-        )
-        st.markdown('</div>', unsafe_allow_html=True)
-        
-        if uploaded_file is not None:
-            try:
-                current_image = Image.open(uploaded_file)
-                if current_image.mode != 'RGB':
-                    current_image = current_image.convert('RGB')
-            except Exception as e:
-                st.error(f"❌ Error loading image: {e}")
-    
+    if st.session_state.model_loaded:
+        st.markdown("""
+        <div class="glass-card">
+            <strong>🦜 Welcome to Uganda Bird Spotter!</strong><br>
+            This app uses AI models for bird identification and story generation. 
+            Upload bird photos for identification, then generate AI-powered educational story videos 
+            with narrated audio and beautiful visual effects using Ken Burns animation.
+            
+            <br><br>
+            <strong>📊 Important:</strong> The AI requires at least <strong>49% confidence</strong> in identification 
+            to proceed with video generation. If confidence is low, you'll get specific tips to improve your photo.
+        </div>
+        """, unsafe_allow_html=True)
     else:
-        st.markdown('<div class="section-title">Capture Live Photo</div>', unsafe_allow_html=True)
-        st.markdown('<div class="glass-upload">', unsafe_allow_html=True)
-        camera_image = st.camera_input(
-            "Take a picture of a bird",
-            help="Capture birds for identification",
-            key="camera_input",
-            label_visibility="collapsed"
-        )
-        st.markdown('</div>', unsafe_allow_html=True)
-        
-        if camera_image is not None:
-            try:
-                current_image = Image.open(camera_image)
-                if current_image.mode != 'RGB':
-                    current_image = current_image.convert('RGB')
-            except Exception as e:
-                st.error(f"❌ Error loading camera image: {e}")
+        st.markdown("""
+        <div class="glass-card">
+            <strong>🦜 Welcome to Uganda Bird Spotter!</strong><br>
+            <strong>⚠️ Limited Mode:</strong> Bird identification model is not available, but you can still generate 
+            educational story videos for any bird species manually.
+            
+            <br><br>
+            <strong>To enable full functionality:</strong>
+            <ul>
+                <li>Ensure you have internet connection for model download</li>
+                <li>Check that Google Drive links are accessible</li>
+                <li>Refresh the page to retry model loading</li>
+            </ul>
+        </div>
+        """, unsafe_allow_html=True)
     
-    # Display image and analysis button
-    if current_image is not None:
-        st.markdown('<div class="glass-card">', unsafe_allow_html=True)
-        st.image(current_image, caption="Bird Photo for Analysis", use_column_width=True)
-        st.markdown('</div>', unsafe_allow_html=True)
+    # Method selection - only show if model is loaded
+    if st.session_state.model_loaded:
+        col1, col2 = st.columns(2)
         
-        if st.button("🔍 Identify Bird Species with ResNet34", type="primary", use_container_width=True):
-            if not st.session_state.model_loaded:
-                st.error("❌ Model not loaded. Cannot make predictions.")
-            else:
+        with col1:
+            upload_active = st.session_state.active_method == "upload"
+            if st.button(
+                "📁 Upload Bird Photo", 
+                use_container_width=True, 
+                type="primary" if upload_active else "secondary",
+                key="upload_btn"
+            ):
+                st.session_state.active_method = "upload"
+                st.session_state.current_image = None
+                st.rerun()
+        
+        with col2:
+            camera_active = st.session_state.active_method == "camera"
+            if st.button(
+                "📷 Capture Live Photo", 
+                use_container_width=True, 
+                type="primary" if camera_active else "secondary",
+                key="camera_btn"
+            ):
+                st.session_state.active_method = "camera"
+                st.session_state.current_image = None
+                st.rerun()
+        
+        st.markdown("---")
+        
+        # Image input
+        current_image = None
+        
+        if st.session_state.active_method == "upload":
+            st.markdown('<div class="section-title">Upload Bird Photo</div>', unsafe_allow_html=True)
+            st.markdown('<div class="glass-upload">', unsafe_allow_html=True)
+            uploaded_file = st.file_uploader(
+                "Choose a bird image", 
+                type=['jpg', 'jpeg', 'png'],
+                help="Upload photos of birds for identification",
+                label_visibility="collapsed",
+                key="file_uploader"
+            )
+            st.markdown('</div>', unsafe_allow_html=True)
+            
+            if uploaded_file is not None:
+                try:
+                    current_image = Image.open(uploaded_file)
+                    if current_image.mode != 'RGB':
+                        current_image = current_image.convert('RGB')
+                except Exception as e:
+                    st.error(f"❌ Error loading image: {e}")
+        
+        else:
+            st.markdown('<div class="section-title">Capture Live Photo</div>', unsafe_allow_html=True)
+            st.markdown('<div class="glass-upload">', unsafe_allow_html=True)
+            camera_image = st.camera_input(
+                "Take a picture of a bird",
+                help="Capture birds for identification",
+                key="camera_input",
+                label_visibility="collapsed"
+            )
+            st.markdown('</div>', unsafe_allow_html=True)
+            
+            if camera_image is not None:
+                try:
+                    current_image = Image.open(camera_image)
+                    if current_image.mode != 'RGB':
+                        current_image = current_image.convert('RGB')
+                except Exception as e:
+                    st.error(f"❌ Error loading camera image: {e}")
+        
+        # Display image and analysis button
+        if current_image is not None:
+            st.markdown('<div class="glass-card">', unsafe_allow_html=True)
+            st.image(current_image, caption="Bird Photo for Analysis", use_column_width=True)
+            st.markdown('</div>', unsafe_allow_html=True)
+            
+            if st.button("🔍 Identify Bird Species with ResNet34", type="primary", use_container_width=True):
                 with st.spinner("Analyzing bird species using ResNet34..."):
                     detections, classifications, original_image, meets_threshold = bird_model.predict_bird_species(current_image)
                     
@@ -1593,82 +1591,82 @@ def main():
                     st.session_state.bird_classifications = classifications
                     st.session_state.current_image = original_image
                     st.session_state.confidence_met_threshold = meets_threshold
-    
-    # Display results
-    if st.session_state.detection_complete and st.session_state.current_image is not None:
-        st.markdown("---")
-        st.markdown('<div class="section-title">🎯 ResNet34 Identification Results</div>', unsafe_allow_html=True)
         
-        detections = st.session_state.bird_detections
-        classifications = st.session_state.bird_classifications
-        meets_threshold = st.session_state.confidence_met_threshold
-        
-        if not detections:
-            st.info("🔍 No birds detected in this image")
-        else:
-            # Calculate average confidence
-            avg_confidence = sum(conf for _, conf in classifications) / len(classifications) if classifications else 0.0
+        # Display results
+        if st.session_state.detection_complete and st.session_state.current_image is not None:
+            st.markdown("---")
+            st.markdown('<div class="section-title">🎯 ResNet34 Identification Results</div>', unsafe_allow_html=True)
             
-            # Display confidence status
-            if meets_threshold:
-                bird_model.display_high_confidence_success(avg_confidence)
+            detections = st.session_state.bird_detections
+            classifications = st.session_state.bird_classifications
+            meets_threshold = st.session_state.confidence_met_threshold
+            
+            if not detections:
+                st.info("🔍 No birds detected in this image")
             else:
-                bird_model.display_low_confidence_warning(avg_confidence)
-            
-            # Metrics
-            col_metric1, col_metric2, col_metric3 = st.columns(3)
-            with col_metric1:
-                st.markdown('<div class="glass-metric">', unsafe_allow_html=True)
-                st.metric("Birds Identified", len(detections))
-                st.markdown('</div>', unsafe_allow_html=True)
-            
-            with col_metric2:
-                st.markdown('<div class="glass-metric">', unsafe_allow_html=True)
-                st.metric("Avg Confidence", f"{avg_confidence:.1%}")
-                st.markdown('</div>', unsafe_allow_html=True)
-            
-            with col_metric3:
-                st.markdown('<div class="glass-metric">', unsafe_allow_html=True)
-                status = "✅ Met" if meets_threshold else "❌ Below"
-                st.metric("Confidence Threshold", status)
-                st.markdown('</div>', unsafe_allow_html=True)
-            
-            # Only show detailed bird information if confidence threshold is met
-            if meets_threshold:
-                # Process each bird
-                for i, ((box, det_conf), (species, class_conf)) in enumerate(zip(detections, classifications)):
-                    st.markdown("---")
-                    
-                    # Bird information
-                    st.markdown('<div class="glass-card">', unsafe_allow_html=True)
-                    st.markdown(f"### 🐦 Bird #{i+1} - {species}")
-                    
-                    st.markdown(f"""
-                    <div style="padding: 15px; background: rgba(255,255,255,0.1); border-radius: 8px;">
-                        <h4>ResNet34 Model Prediction</h4>
-                        <p><strong>Species:</strong> {species}</p>
-                        <p><strong>Confidence:</strong> {class_conf:.1%}</p>
-                        <p><strong>Detection Score:</strong> {det_conf:.1%}</p>
-                    </div>
-                    """, unsafe_allow_html=True)
+                # Calculate average confidence
+                avg_confidence = sum(conf for _, conf in classifications) / len(classifications) if classifications else 0.0
+                
+                # Display confidence status
+                if meets_threshold:
+                    bird_model.display_high_confidence_success(avg_confidence)
+                else:
+                    bird_model.display_low_confidence_warning(avg_confidence)
+                
+                # Metrics
+                col_metric1, col_metric2, col_metric3 = st.columns(3)
+                with col_metric1:
+                    st.markdown('<div class="glass-metric">', unsafe_allow_html=True)
+                    st.metric("Birds Identified", len(detections))
                     st.markdown('</div>', unsafe_allow_html=True)
-                    
-                    # Store the species for video generation
-                    st.session_state.selected_species_for_video = species
-        
-        # Reset button
-        if st.button("🔄 Analyze Another Image", type="secondary", use_container_width=True):
-            st.session_state.detection_complete = False
-            st.session_state.bird_detections = []
-            st.session_state.bird_classifications = []
-            st.session_state.current_image = None
-            st.session_state.generated_video_path = None
-            st.session_state.generated_story = None
-            st.session_state.used_images = None
-            st.session_state.confidence_met_threshold = False
-            st.rerun()
+                
+                with col_metric2:
+                    st.markdown('<div class="glass-metric">', unsafe_allow_html=True)
+                    st.metric("Avg Confidence", f"{avg_confidence:.1%}")
+                    st.markdown('</div>', unsafe_allow_html=True)
+                
+                with col_metric3:
+                    st.markdown('<div class="glass-metric">', unsafe_allow_html=True)
+                    status = "✅ Met" if meets_threshold else "❌ Below"
+                    st.metric("Confidence Threshold", status)
+                    st.markdown('</div>', unsafe_allow_html=True)
+                
+                # Only show detailed bird information if confidence threshold is met
+                if meets_threshold:
+                    # Process each bird
+                    for i, ((box, det_conf), (species, class_conf)) in enumerate(zip(detections, classifications)):
+                        st.markdown("---")
+                        
+                        # Bird information
+                        st.markdown('<div class="glass-card">', unsafe_allow_html=True)
+                        st.markdown(f"### 🐦 Bird #{i+1} - {species}")
+                        
+                        st.markdown(f"""
+                        <div style="padding: 15px; background: rgba(255,255,255,0.1); border-radius: 8px;">
+                            <h4>ResNet34 Model Prediction</h4>
+                            <p><strong>Species:</strong> {species}</p>
+                            <p><strong>Confidence:</strong> {class_conf:.1%}</p>
+                            <p><strong>Detection Score:</strong> {det_conf:.1%}</p>
+                        </div>
+                        """, unsafe_allow_html=True)
+                        st.markdown('</div>', unsafe_allow_html=True)
+                        
+                        # Store the species for video generation
+                        st.session_state.selected_species_for_video = species
+            
+            # Reset button
+            if st.button("🔄 Analyze Another Image", type="secondary", use_container_width=True):
+                st.session_state.detection_complete = False
+                st.session_state.bird_detections = []
+                st.session_state.bird_classifications = []
+                st.session_state.current_image = None
+                st.session_state.generated_video_path = None
+                st.session_state.generated_story = None
+                st.session_state.used_images = None
+                st.session_state.confidence_met_threshold = False
+                st.rerun()
     
-    # Story Video Generation Section - Only show if confidence threshold was met
+    # Story Video Generation Section
     st.markdown("---")
     st.markdown('<div class="section-title">🎬 AI Story Video Generator</div>', unsafe_allow_html=True)
     
@@ -1690,8 +1688,8 @@ def main():
         ```
         """)
     else:
-        # Only show video generation options if confidence threshold was met
-        if st.session_state.get('confidence_met_threshold', False):
+        # Show video generation options based on model availability
+        if st.session_state.model_loaded and st.session_state.get('confidence_met_threshold', False):
             st.markdown(f"""
             <div class="video-section">
                 <strong>🎉 Confidence Threshold Met! Video Generation Available</strong><br>
@@ -1729,27 +1727,45 @@ def main():
                             else:
                                 st.error("❌ Failed to generate story video")
         else:
-            st.warning("""
-            **⚠️ Video Generation Currently Unavailable**
-            
-            To generate story videos, please first identify a bird species with at least 49% confidence.
-            Upload a clear photo of a bird and ensure the identification meets the confidence threshold.
-            """)
+            if st.session_state.model_loaded:
+                st.warning("""
+                **⚠️ Video Generation Currently Unavailable**
+                
+                To generate story videos, please first identify a bird species with at least 49% confidence.
+                Upload a clear photo of a bird and ensure the identification meets the confidence threshold.
+                """)
+            else:
+                st.info("""
+                **📹 Manual Video Generation Available**
+                
+                You can generate story videos for any bird species manually using the selection below.
+                """)
         
         # Manual species selection (always available)
         st.markdown("---")
         st.markdown("### 🔍 Manual Species Selection")
-        st.markdown("_You can also generate videos for any species manually:_")
+        st.markdown("_Generate videos for any bird species:_")
+        
+        # Get available species for manual selection
+        if st.session_state.model_loaded:
+            species_options = bird_model.bird_species
+        else:
+            # Default species if model not loaded
+            species_options = [
+                "African Fish Eagle", "Grey Crowned Crane", "Shoebill Stork", 
+                "Lilac-breasted Roller", "Great Blue Turaco", "African Jacana",
+                "Marabou Stork", "Pied Kingfisher", "Superb Starling", "Hadada Ibis"
+            ]
         
         col1, col2 = st.columns([3, 1])
         
         with col1:
             manual_species = st.selectbox(
                 "Select a bird species:",
-                options=bird_model.bird_species,
+                options=species_options,
                 index=0 if not st.session_state.get('selected_species_for_video') else 
-                      bird_model.bird_species.index(st.session_state.selected_species_for_video) 
-                      if st.session_state.selected_species_for_video in bird_model.bird_species else 0
+                      species_options.index(st.session_state.selected_species_for_video) 
+                      if st.session_state.selected_species_for_video in species_options else 0
             )
         
         with col2:
