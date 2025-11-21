@@ -283,6 +283,13 @@ st.markdown("""
         margin: 15px 0;
         text-align: center;
     }
+    .download-instructions {
+        background: rgba(255, 248, 225, 0.4);
+        border: 2px solid #FFD700;
+        border-radius: 12px;
+        padding: 20px;
+        margin: 15px 0;
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -321,82 +328,63 @@ class BirdStoryGenerator:
         tmpl = random.choice(self.templates)
         return tmpl.format(name=name, color_phrase=color_phrase, desc=desc)
 
-# ========== ROBUST GOOGLE DRIVE DOWNLOADER ==========
-def download_google_drive_file(file_id, destination):
-    """Robust Google Drive file downloader that handles large files"""
-    try:
-        if os.path.exists(destination):
-            file_size = os.path.getsize(destination)
-            if file_size > 1000000:  # If file exists and is >1MB, assume it's valid
-                st.info(f"✅ File already exists: {os.path.basename(destination)} ({file_size/(1024*1024):.1f} MB)")
-                return True
-
-        st.info(f"📥 Downloading {os.path.basename(destination)} from Google Drive...")
-        
-        # Create a session to handle cookies
-        session = requests.Session()
-        
-        # First, get the confirmation token
-        URL = "https://drive.google.com/uc?export=download"
-        params = {'id': file_id}
-        
-        response = session.get(URL, params=params, stream=True)
-        token = None
-        
-        # Check for confirmation token
-        for key, value in response.cookies.items():
-            if key.startswith('download_warning'):
-                token = value
-                break
-        
-        if token:
-            params['confirm'] = token
-        
-        # Download the file with progress
-        response = session.get(URL, params=params, stream=True)
-        
-        if response.status_code != 200:
-            st.error(f"❌ Failed to download. HTTP Status: {response.status_code}")
-            return False
-        
-        # Get file size
-        total_size = int(response.headers.get('content-length', 0))
-        
-        # Create progress bar
-        progress_bar = st.progress(0)
-        status_text = st.empty()
-        
-        downloaded = 0
-        with open(destination, 'wb') as f:
-            for chunk in response.iter_content(chunk_size=32768):
-                if chunk:
-                    f.write(chunk)
-                    downloaded += len(chunk)
-                    if total_size > 0:
-                        progress = downloaded / total_size
-                        progress_bar.progress(progress)
-                        status_text.text(f"Downloaded: {downloaded/(1024*1024):.1f} MB / {total_size/(1024*1024):.1f} MB")
-        
-        progress_bar.progress(1.0)
-        status_text.empty()
-        
-        # Verify download
-        if os.path.exists(destination):
-            file_size = os.path.getsize(destination)
-            if file_size > 1000000:  # Ensure file is not empty/corrupted (>1MB)
-                st.success(f"✅ Successfully downloaded {os.path.basename(destination)}! ({file_size/(1024*1024):.1f} MB)")
-                return True
+# ========== MANUAL DOWNLOAD HANDLER ==========
+def check_and_download_models():
+    """Check if models exist and provide download instructions if not"""
+    models_info = {
+        "bird_path.pth": {
+            "url": "https://drive.google.com/file/d/1J9T5r5TboWzvqAPQHmfvQmozor_wmmPz/view?usp=sharing",
+            "file_id": "1J9T5r5TboWzvqAPQHmfvQmozor_wmmPz",
+            "description": "Bird story generation model with images and templates"
+        },
+        "resnet34_bird_region_weights.pth": {
+            "url": "https://drive.google.com/file/d/1yfiYcz6e2hWtQTXW6AZVU-iwSUjDP92y/view?usp=sharing", 
+            "file_id": "1yfiYcz6e2hWtQTXW6AZVU-iwSUjDP92y",
+            "description": "ResNet34 model for bird species identification"
+        }
+    }
+    
+    missing_models = []
+    available_models = []
+    
+    for model_name, model_info in models_info.items():
+        if os.path.exists(model_name):
+            file_size = os.path.getsize(model_name) / (1024 * 1024)  # Size in MB
+            if file_size > 1:  # Model file should be >1MB
+                available_models.append((model_name, file_size))
             else:
-                st.error(f"❌ Downloaded file is too small - may be corrupted")
-                os.remove(destination)
-                return False
+                missing_models.append((model_name, model_info))
         else:
-            st.error(f"❌ Download failed - file not created")
-            return False
-            
-    except Exception as e:
-        st.error(f"❌ Download error: {e}")
-        return False
+            missing_models.append((model_name, model_info))
+    
+    return available_models, missing_models
+
+def show_download_instructions(missing_models):
+    """Show download instructions for missing models"""
+    st.markdown("""
+    <div class="download-instructions">
+        <h3>📥 Manual Model Download Required</h3>
+        <p><strong>Large model files cannot be automatically downloaded from Google Drive.</strong></p>
+        <p>Please manually download the following files and place them in the same folder as this app:</p>
+    </div>
+    """, unsafe_allow_html=True)
+    
+    for model_name, model_info in missing_models:
+        st.markdown(f"""
+        <div class="glass-card">
+            <h4>🔽 {model_name}</h4>
+            <p><strong>Description:</strong> {model_info['description']}</p>
+            <p><strong>Download Link:</strong> <a href="{model_info['url']}" target="_blank">{model_info['url']}</a></p>
+            <p><strong>Instructions:</strong></p>
+            <ol>
+                <li>Click the download link above</li>
+                <li>Click the download button in Google Drive (⬇️ icon)</li>
+                <li>Save the file in the same folder as this app</li>
+                <li>Rename the file to: <code>{model_name}</code></li>
+                <li>Refresh this page after downloading</li>
+            </ol>
+        </div>
+        """, unsafe_allow_html=True)
 
 # ========== BIRD DATA LOADING ==========
 @st.cache_resource
@@ -430,7 +418,7 @@ bird_db = load_bird_data()
 # ========== VIDEO MODEL LOADING ==========
 @st.cache_resource
 def load_video_model():
-    """Load video model with download from Google Drive and multiple location support"""
+    """Load video model with manual download support"""
     # Define possible locations for bird_path.pth
     possible_paths = [
         "bird_path.pth",
@@ -444,37 +432,30 @@ def load_video_model():
     pth_path = None
     for path in possible_paths:
         if os.path.exists(path):
-            pth_path = path
-            st.info(f"📁 Found bird_path.pth at: {path}")
-            break
+            file_size = os.path.getsize(path) / (1024 * 1024)  # Size in MB
+            if file_size > 1:  # Ensure file is not empty/corrupted
+                pth_path = path
+                st.info(f"📁 Found bird_path.pth at: {path} ({file_size:.1f} MB)")
+                break
     
-    # If not found, download it
-    if pth_path is None:
-        st.info("🔍 bird_path.pth not found in standard locations. Downloading...")
-        pth_path = "bird_path.pth"  # Default download location
-        
-        # Google Drive file ID for bird_path.pth
-        file_id = "1J9T5r5TboWzvqAPQHmfvQmozor_wmmPz"
-        
-        success = download_google_drive_file(file_id, pth_path)
-        if not success:
-            st.warning("❌ Could not download bird_path.pth. Using default story generation.")
-            return None
-    
-    try:
-        model_data = torch.load(pth_path, map_location="cpu")
-        st.success(f"✅ Video story model loaded successfully from {pth_path}!")
-        
-        # Display information about loaded model data
-        if isinstance(model_data, dict):
-            st.info(f"📁 Model contains data for {len(model_data)} bird species")
-            # Show sample of what's in the model
-            sample_species = list(model_data.keys())[:3]
-            st.info(f"📸 Sample species: {', '.join(sample_species)}")
+    if pth_path:
+        try:
+            model_data = torch.load(pth_path, map_location="cpu")
+            st.success(f"✅ Video story model loaded successfully from {pth_path}!")
             
-        return model_data
-    except Exception as e:
-        st.warning(f"❌ Error loading video model from {pth_path}: {e}. Using default story generation.")
+            # Display information about loaded model data
+            if isinstance(model_data, dict):
+                st.info(f"📁 Model contains data for {len(model_data)} bird species")
+                # Show sample of what's in the model
+                sample_species = list(model_data.keys())[:3]
+                st.info(f"📸 Sample species: {', '.join(sample_species)}")
+                
+            return model_data
+        except Exception as e:
+            st.warning(f"❌ Error loading video model from {pth_path}: {e}. Using default story generation.")
+            return None
+    else:
+        st.warning("❌ bird_path.pth not found. Using default story generation.")
         return None
 
 # Load video model at startup
@@ -1068,12 +1049,6 @@ class ResNet34BirdModel:
         self.label_map_path = './label_map.json'
         self.confidence_threshold = 0.49  # 49% confidence threshold
         
-    def download_model_from_gdrive(self):
-        """Download model from Google Drive using robust downloader"""
-        # Google Drive file ID for resnet model
-        file_id = "1yfiYcz6e2hWtQTXW6AZVU-iwSUjDP92y"
-        return download_google_drive_file(file_id, self.model_path)
-    
     def check_dependencies(self):
         """Check if PyTorch and torchvision are available"""
         try:
@@ -1139,20 +1114,17 @@ class ResNet34BirdModel:
         if not self.check_dependencies():
             return False
         
-        # First, try to download the model
-        if not os.path.exists(self.model_path):
-            st.info("🔄 Downloading ResNet34 model from Google Drive...")
-            if not self.download_model_from_gdrive():
-                st.error("""
-                ❌ Could not download the model file from Google Drive.
-                
-                Please ensure:
-                1. The Google Drive file is publicly accessible
-                2. You have internet connection
-                
-                The app will continue with limited functionality.
-                """)
+        # Check if model file exists and is valid
+        if os.path.exists(self.model_path):
+            file_size = os.path.getsize(self.model_path) / (1024 * 1024)  # Size in MB
+            if file_size > 1:  # Model file should be >1MB
+                st.info(f"📁 Found ResNet34 model: {self.model_path} ({file_size:.1f} MB)")
+            else:
+                st.error(f"❌ Model file is too small: {file_size:.1f} MB - may be corrupted")
                 return False
+        else:
+            st.warning("❌ ResNet34 model file not found. Manual download required.")
+            return False
         
         try:
             import torch
@@ -1398,23 +1370,31 @@ def initialize_system():
             # Check video dependencies
             check_moviepy_dependencies()
             
-            # Try to load the ResNet model first
-            resnet_success = st.session_state.bird_model.load_model()
+            # Check for required model files
+            available_models, missing_models = check_and_download_models()
             
-            if resnet_success:
-                st.session_state.model_loaded = True
-                st.session_state.system_initialized = True
-                st.success(f"✅ System ready! Can identify {len(st.session_state.bird_model.bird_species)} bird species")
-                st.info(f"📊 Confidence threshold set to: {st.session_state.bird_model.confidence_threshold:.0%}")
-                
-                # Show information about available bird images
-                if video_model_data is not None and isinstance(video_model_data, dict):
-                    st.info(f"📸 Video model contains images for {len(video_model_data)} bird species")
+            if missing_models:
+                show_download_instructions(missing_models)
+            
+            # Try to load the ResNet model if available
+            if not missing_models or any("resnet34" in model[0] for model in available_models):
+                resnet_success = st.session_state.bird_model.load_model()
+                if resnet_success:
+                    st.session_state.model_loaded = True
+                    st.success(f"✅ System ready! Can identify {len(st.session_state.bird_model.bird_species)} bird species")
+                    st.info(f"📊 Confidence threshold set to: {st.session_state.bird_model.confidence_threshold:.0%}")
                 else:
-                    st.info("📖 Story video generation available with placeholder images")
+                    st.warning("⚠️ Bird identification model not available. Manual video generation only.")
             else:
-                st.warning("⚠️ Model loading failed. The app will run with limited functionality (manual video generation only).")
-                st.session_state.system_initialized = True
+                st.warning("⚠️ Bird identification model not available. Manual video generation only.")
+            
+            # Show information about available bird images
+            if video_model_data is not None and isinstance(video_model_data, dict):
+                st.info(f"📸 Video model contains images for {len(video_model_data)} bird species")
+            else:
+                st.info("📖 Story video generation available with placeholder images")
+            
+            st.session_state.system_initialized = True
 
 def main():
     # Initialize the system
