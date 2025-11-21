@@ -1,6 +1,5 @@
-# ========== DEPENDENCY INSTALLATION ==========
-import streamlit as st
 import numpy as np
+from PIL import Image
 import tempfile
 import os
 import base64
@@ -10,34 +9,22 @@ import random
 import requests
 import urllib.request
 import pandas as pd
+import cv2
+import torch
+import torch.nn as nn
+from gtts import gTTS
 import warnings
 import subprocess
 import shutil
 from pathlib import Path
+import subprocess
 import sys
 
-# Install OpenCV first
 try:
     import cv2
 except ImportError:
-    st.warning("📦 OpenCV not available. Installing...")
-    import subprocess
-    import sys
     subprocess.check_call([sys.executable, "-m", "pip", "install", "opencv-python-headless"])
     import cv2
-    st.success("✅ OpenCV installed successfully!")
-
-# Now import other modules
-try:
-    from PIL import Image
-except ImportError:
-    subprocess.check_call([sys.executable, "-m", "pip", "install", "Pillow"])
-    from PIL import Image
-
-import torch
-import torch.nn as nn
-from gtts import gTTS
-
 warnings.filterwarnings('ignore')
 
 # ========== MOVIEPY INSTALLATION AND CONFIGURATION ==========
@@ -52,6 +39,8 @@ def install_moviepy():
     except ImportError:
         st.warning("🎬 MoviePy not available. Installing...")
         try:
+            import subprocess
+            import sys
             subprocess.check_call([sys.executable, "-m", "pip", "install", "moviepy", "imageio", "imageio-ffmpeg"])
             st.success("✅ MoviePy installed successfully!")
             
@@ -305,6 +294,8 @@ def install_gdown():
     except ImportError:
         st.warning("📦 gdown not available. Installing...")
         try:
+            import subprocess
+            import sys
             subprocess.check_call([sys.executable, "-m", "pip", "install", "gdown"])
             import gdown
             st.success("✅ gdown installed successfully!")
