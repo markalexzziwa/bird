@@ -1,5 +1,14 @@
 # ========== DEPENDENCY INSTALLATION ==========
 import streamlit as st
+
+# Set page configuration - MUST BE FIRST STREAMLIT COMMAND
+st.set_page_config(
+    page_title="Uganda Bird Spotter",
+    page_icon="🦅",
+    layout="wide"
+)
+
+# Now import other modules
 import numpy as np
 import tempfile
 import os
@@ -109,13 +118,6 @@ if MOVIEPY_AVAILABLE:
         MOVIEPY_AVAILABLE = False
 else:
     st.error("❌ MoviePy is not available. Video creation features will be limited.")
-
-# Set page configuration
-st.set_page_config(
-    page_title="Uganda Bird Spotter",
-    page_icon="🦅",
-    layout="wide"
-)
 
 # Custom CSS with Glass Morphism
 st.markdown("""
