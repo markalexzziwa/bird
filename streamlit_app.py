@@ -1115,16 +1115,16 @@ class ResNet34BirdModel:
             return False
         
         # Check if model file exists and is valid
-        if os.path.exists(self.model_path):
-            file_size = os.path.getsize(self.model_path) / (1024 * 1024)  # Size in MB
-            if file_size > 1:  # Model file should be >1MB
-                st.info(f"📁 Found ResNet34 model: {self.model_path} ({file_size:.1f} MB)")
-            else:
-                st.error(f"❌ Model file is too small: {file_size:.1f} MB - may be corrupted")
-                return False
-        else:
+        if not os.path.exists(self.model_path):
             st.warning("❌ ResNet34 model file not found. Manual download required.")
             return False
+            
+        file_size = os.path.getsize(self.model_path) / (1024 * 1024)  # Size in MB
+        if file_size <= 1:  # Model file should be >1MB
+            st.error(f"❌ Model file is too small: {file_size:.1f} MB - may be corrupted")
+            return False
+            
+        st.info(f"📁 Found ResNet34 model: {self.model_path} ({file_size:.1f} MB)")
         
         try:
             import torch
@@ -1377,7 +1377,7 @@ def initialize_system():
                 show_download_instructions(missing_models)
             
             # Try to load the ResNet model if available
-            if not missing_models or any("resnet34" in model[0] for model in available_models):
+            if os.path.exists('./resnet34_bird_region_weights.pth'):
                 resnet_success = st.session_state.bird_model.load_model()
                 if resnet_success:
                     st.session_state.model_loaded = True
@@ -1496,8 +1496,8 @@ def main():
             <br><br>
             <strong>To enable full functionality:</strong>
             <ul>
-                <li>Ensure you have internet connection for model download</li>
-                <li>Check that Google Drive links are accessible</li>
+                <li>Download the required model files using the instructions above</li>
+                <li>Place them in the same folder as this app</li>
                 <li>Refresh the page to retry model loading</li>
             </ul>
         </div>
